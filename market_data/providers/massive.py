@@ -41,6 +41,8 @@ TICKER_DETAIL_COLUMNS = [
     "round_lot",
 ]
 
+RELATED_TICKER_COLUMNS = ["ticker", "related_ticker", "result_order"]
+
 
 def normalize_grouped_daily_response(payload: dict[str, Any], data_date: date) -> pd.DataFrame:
     """Normalize Massive grouped daily bars to the canonical daily bar schema."""
@@ -123,3 +125,47 @@ def download_ticker_details(
     details = normalize_ticker_details_response(payload, normalized_ticker)
     logger.info("Fetched Massive ticker details ticker=%s rows=%d", normalized_ticker, len(details))
     return details
+
+
+def normalize_related_tickers_response(payload: dict[str, Any], requested_ticker: str) -> pd.DataFrame:
+    """Normalize Massive related ticker response to source/related ticker rows."""
+
+    normalized_ticker = requested_ticker.upper()
+    rows = []
+    for idx, result in enumerate(payload.get("results") or [], start=1):
+        related_ticker = result.get("ticker")
+        if not related_ticker:
+            continue
+        rows.append(
+            {
+                "ticker": normalized_ticker,
+                "related_ticker": str(related_ticker).upper(),
+                "result_order": idx,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=RELATED_TICKER_COLUMNS)
+
+    return (
+        pd.DataFrame(rows, columns=RELATED_TICKER_COLUMNS)
+        .drop_duplicates(subset=["ticker", "related_ticker"], keep="first")
+        .sort_values(["ticker", "result_order", "related_ticker"])
+        .reset_index(drop=True)
+    )
+
+
+def download_related_tickers(
+    ticker: str,
+    api_key: str,
+    base_url: str = MASSIVE_BASE_URL,
+    client: MassiveClient | None = None,
+) -> pd.DataFrame:
+    """Download Massive related tickers for one ticker."""
+
+    normalized_ticker = ticker.upper()
+    client = client or MassiveClient(api_key=api_key, base_url=base_url)
+    payload = client.get_json(f"/v1/related-companies/{normalized_ticker}")
+    related = normalize_related_tickers_response(payload, normalized_ticker)
+    logger.info("Fetched Massive related tickers ticker=%s rows=%d", normalized_ticker, len(related))
+    return related

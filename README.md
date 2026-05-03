@@ -114,6 +114,24 @@ python scripts/download_ticker_details.py --limit 10 --calls-per-minute 0
 
 The script writes `ticker_details.parquet` and `ticker_details.metadata.json` in `data/reference` by default. It stores Massive-native reference fields, including `sic_code` and `sic_description`; it does not derive sector, GICS, or other feature-engineering labels.
 
+## Related Tickers
+
+Download Massive related tickers for the filtered ticker universe:
+
+```bash
+python scripts/download_related_tickers.py
+```
+
+Related tickers are fetched one symbol at a time from Massive's Related Tickers endpoint and are updated daily by Massive. This job writes a replace-style snapshot by default.
+
+Short smoke run:
+
+```bash
+python scripts/download_related_tickers.py --limit 10 --calls-per-minute 0
+```
+
+The script writes `related_tickers.parquet` and `related_tickers.metadata.json` in `data/reference` by default. The parquet stores source ticker to related ticker rows and preserves the result order returned by Massive; it does not derive peer groups, scores, or portfolio labels.
+
 ## Environment
 
 Massive credentials are read from environment variables or from a `.env` file in the current working directory:
@@ -257,6 +275,34 @@ Single-date mode also includes:
 - `calls_per_minute`
 - `parquet_file`
 
+`related_tickers.parquet` uses this Massive-native related ticker schema:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `ticker` | string | Source ticker symbol queried |
+| `related_ticker` | string | Related ticker returned by Massive |
+| `result_order` | number | One-based result order returned by Massive |
+
+`related_tickers.metadata.json` always includes:
+
+- `collected_date_utc`
+- `collected_at_utc`
+- `provider`
+- `dataset`
+- `mode`
+- `input_file`
+- `input_tickers`
+- `requested_tickers`
+- `partial`
+- `pending_tickers`
+- `empty_tickers`
+- `failed_tickers`
+- `calls_per_minute`
+- `rows`
+- `tickers`
+- `related_tickers`
+- `parquet_file`
+
 ## Local Tests
 
 ```bash
@@ -297,6 +343,12 @@ Show ticker details help:
 
 ```bash
 docker compose run --rm finbot-ticker-details --help
+```
+
+Show related tickers help:
+
+```bash
+docker compose run --rm finbot-related-tickers --help
 ```
 
 No-network smoke test:
@@ -344,4 +396,10 @@ Refetch ticker details for 10 tickers from the container:
 
 ```bash
 docker compose run --rm finbot-ticker-details --refresh-all --limit 10 --calls-per-minute 5
+```
+
+Download related tickers for the first 10 source tickers from the container:
+
+```bash
+docker compose run --rm finbot-related-tickers --limit 10 --calls-per-minute 5
 ```

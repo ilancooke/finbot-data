@@ -7,6 +7,7 @@ import pandas as pd
 
 from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.datasets.related_tickers import download_related_tickers_snapshot, read_related_tickers
 from market_data.datasets.ticker_details import (
     download_ticker_details_snapshot,
     read_ticker_details,
@@ -14,7 +15,13 @@ from market_data.datasets.ticker_details import (
 )
 from market_data.http import MassiveClient, MassiveHttpError
 from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
-from market_data.providers.massive import TICKER_DETAIL_COLUMNS, normalize_grouped_daily_response, normalize_ticker_details_response
+from market_data.providers.massive import (
+    RELATED_TICKER_COLUMNS,
+    TICKER_DETAIL_COLUMNS,
+    normalize_grouped_daily_response,
+    normalize_related_tickers_response,
+    normalize_ticker_details_response,
+)
 from market_data.storage import write_daily_snapshot
 from market_data.universe import (
     fetch_ticker_universe,
@@ -24,6 +31,7 @@ from market_data.universe import (
     write_ticker_universe,
 )
 from scripts.download_daily_bars import main
+from scripts.download_related_tickers import main as related_tickers_main
 from scripts.download_ticker_details import main as ticker_details_main
 from scripts.download_tickers import main as tickers_main
 
@@ -414,6 +422,111 @@ def test_download_ticker_details_cli_writes_details(tmp_path, monkeypatch):
     assert "sector" not in details.columns
     assert metadata["provider"] == "massive"
     assert metadata["dataset"] == "ticker_details"
+    assert metadata["requested_tickers"] == 1
+
+
+def test_normalize_massive_related_tickers_response_uses_source_and_related_schema():
+    payload = {
+        "status": "OK",
+        "ticker": "AAPL",
+        "results": [
+            {"ticker": "MSFT"},
+            {"ticker": "GOOGL"},
+            {"ticker": "MSFT"},
+            {},
+        ],
+    }
+
+    normalized = normalize_related_tickers_response(payload, "aapl")
+
+    assert list(normalized.columns) == RELATED_TICKER_COLUMNS
+    assert normalized["ticker"].tolist() == ["AAPL", "AAPL"]
+    assert normalized["related_ticker"].tolist() == ["MSFT", "GOOGL"]
+    assert normalized["result_order"].tolist() == [1, 2]
+
+
+def test_download_related_tickers_snapshot_writes_replace_snapshot(tmp_path, monkeypatch):
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, tmp_path, metadata={"provider": "massive"})
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    calls = []
+
+    def fake_downloader(ticker, api_key):
+        calls.append(ticker)
+        assert api_key == "test-key"
+        if ticker == "MSFT":
+            return pd.DataFrame(columns=RELATED_TICKER_COLUMNS)
+        return pd.DataFrame(
+            [
+                {"ticker": ticker, "related_ticker": "MSFT", "result_order": 1},
+                {"ticker": ticker, "related_ticker": "GOOGL", "result_order": 2},
+            ]
+        )
+
+    output_path = download_related_tickers_snapshot(
+        input_dir=tmp_path,
+        output_dir=tmp_path,
+        calls_per_minute=0,
+        downloader=fake_downloader,
+    )
+    related = read_related_tickers(tmp_path)
+    metadata = json.loads((tmp_path / "related_tickers.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == tmp_path / "related_tickers.parquet"
+    assert calls == ["AAPL", "MSFT"]
+    assert related["ticker"].tolist() == ["AAPL", "AAPL"]
+    assert related["related_ticker"].tolist() == ["MSFT", "GOOGL"]
+    assert metadata["provider"] == "massive"
+    assert metadata["dataset"] == "related_tickers"
+    assert metadata["mode"] == "replace"
+    assert metadata["input_tickers"] == 2
+    assert metadata["requested_tickers"] == 2
+    assert metadata["empty_tickers"] == ["MSFT"]
+
+
+def test_download_related_tickers_cli_writes_related_rows(tmp_path, monkeypatch):
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, tmp_path, metadata={"provider": "massive"})
+
+    def fake_download_related_tickers(ticker, api_key):
+        assert ticker == "AAPL"
+        assert api_key == "test-key"
+        return pd.DataFrame(
+            [
+                {"ticker": "AAPL", "related_ticker": "MSFT", "result_order": 1},
+            ]
+        )
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    monkeypatch.setattr("market_data.datasets.related_tickers.download_related_tickers", fake_download_related_tickers)
+
+    exit_code = related_tickers_main(
+        [
+            "--input-dir",
+            str(tmp_path),
+            "--calls-per-minute",
+            "0",
+            "--limit",
+            "1",
+        ]
+    )
+    related = pd.read_parquet(tmp_path / "related_tickers.parquet")
+    metadata = json.loads((tmp_path / "related_tickers.metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert related["ticker"].tolist() == ["AAPL"]
+    assert related["related_ticker"].tolist() == ["MSFT"]
+    assert metadata["dataset"] == "related_tickers"
+    assert metadata["partial"] is True
     assert metadata["requested_tickers"] == 1
 
 
