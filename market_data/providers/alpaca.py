@@ -6,7 +6,7 @@ from typing import Sequence
 
 import pandas as pd
 
-from finbot_data.normalize import BAR_COLUMNS, normalize_bars_frame
+from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
 
 logger = logging.getLogger(__name__)
 

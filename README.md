@@ -21,6 +21,15 @@ Dependencies are intentionally limited to the active downloader and its tests:
 - `pytest`
 - `requests`
 
+## Project Layout
+
+- `scripts/`: command-line entrypoints.
+- `market_data/datasets/`: dataset-specific orchestration such as daily bars.
+- `market_data/providers/`: provider API clients such as Massive.
+- `market_data/storage.py`: shared parquet and metadata writing.
+- `market_data/config.py`: environment and `.env` helpers.
+- `tests/`: local test suite.
+
 ## Run
 
 Use the script directly from the repository root:
@@ -129,5 +138,5 @@ pytest
 Optional syntax check:
 
 ```bash
-python -m compileall finbot_data scripts
+python -m compileall market_data scripts
 ```

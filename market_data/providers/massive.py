@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from finbot_data.normalize import BAR_COLUMNS
+from market_data.normalize import BAR_COLUMNS
 
 logger = logging.getLogger(__name__)
 

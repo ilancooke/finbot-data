@@ -5,11 +5,12 @@ import json
 
 import pandas as pd
 
-from finbot_data.normalize import BAR_COLUMNS, normalize_bars_frame
-from finbot_data.providers.massive import normalize_grouped_daily_response
-from finbot_data.storage import write_daily_snapshot
-from scripts import download_daily_bars
-from scripts.download_daily_bars import _days_window_start_date, _window_start_date, download_history, main
+from market_data.datasets import daily_bars
+from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
+from market_data.providers.massive import normalize_grouped_daily_response
+from market_data.storage import write_daily_snapshot
+from scripts.download_daily_bars import main
 
 
 def test_normalize_bars_frame_uses_canonical_schema():
@@ -131,11 +132,11 @@ def test_download_script_supports_days_window_when_network_disabled(tmp_path, mo
 
 
 def test_window_start_date_excludes_exact_year_boundary():
-    assert _window_start_date(date(2026, 5, 1), 2) == date(2024, 5, 2)
+    assert window_start_date(date(2026, 5, 1), 2) == date(2024, 5, 2)
 
 
 def test_days_window_start_date_includes_requested_number_of_calendar_days():
-    assert _days_window_start_date(date(2026, 5, 1), 10) == date(2026, 4, 22)
+    assert days_window_start_date(date(2026, 5, 1), 10) == date(2026, 4, 22)
 
 
 def test_download_history_replaces_existing_snapshot_and_records_empty_dates(tmp_path, monkeypatch):
@@ -155,7 +156,7 @@ def test_download_history_replaces_existing_snapshot_and_records_empty_dates(tmp
         ),
         output_dir,
     )
-    monkeypatch.setattr(download_daily_bars, "_window_start_date", lambda end_date, years: date(2026, 5, 1))
+    monkeypatch.setattr(daily_bars, "window_start_date", lambda end_date, years: date(2026, 5, 1))
     monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
 
     def fake_downloader(data_date, api_key):
