@@ -1,0 +1,13 @@
+services:
+  finbot-data:
+    build: .
+    image: finbot-data:local
+    environment:
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:?Set MASSIVE_API_KEY in .env}
+      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+      FINBOT_RAW_BARS_DIR: /app/data/daily_bars
+      FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
+      MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-5}
+    volumes:
+      - ./data:/app/data
+    command: ["--help"]

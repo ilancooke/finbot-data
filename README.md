@@ -140,3 +140,48 @@ Optional syntax check:
 ```bash
 python -m compileall market_data scripts
 ```
+
+## Docker
+
+Build the local image:
+
+```bash
+docker compose build
+```
+
+Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The container writes to `/app/data/daily_bars`, which maps to `./data/daily_bars` on the host.
+
+Show the script help from the container:
+
+```bash
+docker compose run --rm finbot-data
+```
+
+No-network smoke test:
+
+```bash
+docker compose run --rm \
+  -e FINBOT_INGEST_DISABLE_NETWORK=1 \
+  finbot-data --end-date 2026-05-01 --days 10 --calls-per-minute 0
+```
+
+Short Massive API test:
+
+```bash
+docker compose run --rm \
+  finbot-data --end-date 2026-05-01 --days 10 --calls-per-minute 5
+```
+
+Full free-plan history refresh:
+
+```bash
+docker compose run --rm \
+  finbot-data --end-date 2026-05-01 --years 2 --calls-per-minute 5
+```
+
+For a scheduled homelab run, let the host provide the date:
+
+```bash
+docker compose run --rm \
+  finbot-data --end-date "$(date +%F)" --years 2 --calls-per-minute 5
+```
