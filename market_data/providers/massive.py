@@ -13,6 +13,34 @@ logger = logging.getLogger(__name__)
 
 MassiveApiError = MassiveHttpError
 
+TICKER_DETAIL_COLUMNS = [
+    "ticker",
+    "name",
+    "market",
+    "locale",
+    "primary_exchange",
+    "type",
+    "active",
+    "currency_name",
+    "cik",
+    "composite_figi",
+    "share_class_figi",
+    "sic_code",
+    "sic_description",
+    "description",
+    "homepage_url",
+    "market_cap",
+    "total_employees",
+    "list_date",
+    "delisted_utc",
+    "ticker_root",
+    "ticker_suffix",
+    "phone_number",
+    "share_class_shares_outstanding",
+    "weighted_shares_outstanding",
+    "round_lot",
+]
+
 
 def normalize_grouped_daily_response(payload: dict[str, Any], data_date: date) -> pd.DataFrame:
     """Normalize Massive grouped daily bars to the canonical daily bar schema."""
@@ -65,3 +93,33 @@ def download_grouped_daily_bars(
     bars = normalize_grouped_daily_response(payload, data_date)
     logger.info("Fetched Massive grouped daily bars date=%s rows=%d", data_date.isoformat(), len(bars))
     return bars
+
+
+def normalize_ticker_details_response(payload: dict[str, Any], requested_ticker: str) -> pd.DataFrame:
+    """Normalize Massive ticker overview response to native company detail fields."""
+
+    result = payload.get("results") or {}
+    if not result:
+        return pd.DataFrame(columns=TICKER_DETAIL_COLUMNS)
+
+    row = {column: result.get(column) for column in TICKER_DETAIL_COLUMNS}
+    row["ticker"] = str(row.get("ticker") or requested_ticker).upper()
+    return pd.DataFrame([row], columns=TICKER_DETAIL_COLUMNS)
+
+
+def download_ticker_details(
+    ticker: str,
+    api_key: str,
+    as_of: date | None = None,
+    base_url: str = MASSIVE_BASE_URL,
+    client: MassiveClient | None = None,
+) -> pd.DataFrame:
+    """Download Massive reference details for one ticker."""
+
+    normalized_ticker = ticker.upper()
+    params = {"date": as_of.isoformat()} if as_of is not None else None
+    client = client or MassiveClient(api_key=api_key, base_url=base_url)
+    payload = client.get_json(f"/v3/reference/tickers/{normalized_ticker}", params=params)
+    details = normalize_ticker_details_response(payload, normalized_ticker)
+    logger.info("Fetched Massive ticker details ticker=%s rows=%d", normalized_ticker, len(details))
+    return details

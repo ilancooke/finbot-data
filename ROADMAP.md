@@ -4,7 +4,7 @@ This project is intentionally starting small: containerized scripts that downloa
 
 ## Future Data Jobs
 
-- Add more Massive data jobs, such as options, news, fundamentals, and reference/details endpoints.
+- Add more Massive data jobs, such as options, news, fundamentals, and additional reference endpoints.
 - Keep each data pull as a focused script with shared helpers for HTTP, rate limiting, storage, metadata, and ticker universe loading.
 
 ## Orchestration

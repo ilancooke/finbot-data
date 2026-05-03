@@ -22,3 +22,7 @@ services:
   finbot-tickers:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_tickers.py"]
+
+  finbot-ticker-details:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ticker_details.py"]

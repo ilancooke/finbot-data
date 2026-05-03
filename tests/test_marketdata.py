@@ -7,9 +7,14 @@ import pandas as pd
 
 from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.datasets.ticker_details import (
+    download_ticker_details_snapshot,
+    read_ticker_details,
+    write_ticker_details_snapshot,
+)
 from market_data.http import MassiveClient, MassiveHttpError
 from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
-from market_data.providers.massive import normalize_grouped_daily_response
+from market_data.providers.massive import TICKER_DETAIL_COLUMNS, normalize_grouped_daily_response, normalize_ticker_details_response
 from market_data.storage import write_daily_snapshot
 from market_data.universe import (
     fetch_ticker_universe,
@@ -19,6 +24,7 @@ from market_data.universe import (
     write_ticker_universe,
 )
 from scripts.download_daily_bars import main
+from scripts.download_ticker_details import main as ticker_details_main
 from scripts.download_tickers import main as tickers_main
 
 
@@ -268,6 +274,147 @@ def test_normalize_massive_grouped_daily_response_uses_canonical_schema():
     assert list(normalized.columns) == BAR_COLUMNS
     assert normalized["symbol"].tolist() == ["AAPL", "MSFT"]
     assert normalized["date"].tolist() == [date(2026, 5, 1), date(2026, 5, 1)]
+
+
+def test_normalize_massive_ticker_details_response_keeps_native_sic_fields():
+    payload = {
+        "status": "OK",
+        "results": {
+            "ticker": "aapl",
+            "name": "Apple Inc.",
+            "market": "stocks",
+            "locale": "us",
+            "primary_exchange": "XNAS",
+            "type": "CS",
+            "active": True,
+            "sic_code": "3571",
+            "sic_description": "ELECTRONIC COMPUTERS",
+            "description": "Consumer electronics and services company.",
+            "homepage_url": "https://www.apple.com",
+            "market_cap": 1000,
+            "total_employees": 100,
+        },
+    }
+
+    normalized = normalize_ticker_details_response(payload, "AAPL")
+
+    assert list(normalized.columns) == TICKER_DETAIL_COLUMNS
+    assert normalized.loc[0, "ticker"] == "AAPL"
+    assert normalized.loc[0, "sic_code"] == "3571"
+    assert normalized.loc[0, "sic_description"] == "ELECTRONIC COMPUTERS"
+    assert "sector" not in normalized.columns
+    assert "gics_sector" not in normalized.columns
+
+
+def test_download_ticker_details_snapshot_reuses_cached_rows_and_fetches_missing(tmp_path, monkeypatch):
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, tmp_path, metadata={"provider": "massive"})
+    write_ticker_details_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                    "sic_code": "3571",
+                    "sic_description": "ELECTRONIC COMPUTERS",
+                }
+            ]
+        ),
+        tmp_path,
+        metadata={"provider": "massive"},
+    )
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    calls = []
+
+    def fake_downloader(ticker, api_key, as_of):
+        calls.append(ticker)
+        assert api_key == "test-key"
+        assert as_of == date(2026, 5, 1)
+        return pd.DataFrame(
+            [
+                {
+                    "ticker": ticker,
+                    "name": "Microsoft Corporation",
+                    "sic_code": "7372",
+                    "sic_description": "SERVICES-PREPACKAGED SOFTWARE",
+                }
+            ]
+        )
+
+    output_path = download_ticker_details_snapshot(
+        details_date=date(2026, 5, 1),
+        input_dir=tmp_path,
+        output_dir=tmp_path,
+        calls_per_minute=0,
+        downloader=fake_downloader,
+    )
+    details = read_ticker_details(tmp_path)
+    metadata = json.loads((tmp_path / "ticker_details.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == tmp_path / "ticker_details.parquet"
+    assert calls == ["MSFT"]
+    assert details["ticker"].tolist() == ["AAPL", "MSFT"]
+    assert details.loc[details["ticker"] == "AAPL", "sic_code"].item() == "3571"
+    assert details.loc[details["ticker"] == "MSFT", "sic_code"].item() == "7372"
+    assert metadata["dataset"] == "ticker_details"
+    assert metadata["mode"] == "cache-merge"
+    assert metadata["details_date"] == "2026-05-01"
+    assert metadata["cached_tickers"] == 1
+    assert metadata["requested_tickers"] == 1
+    assert metadata["fetched_tickers"] == 1
+
+
+def test_download_ticker_details_cli_writes_details(tmp_path, monkeypatch):
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, tmp_path, metadata={"provider": "massive"})
+
+    def fake_download_ticker_details(ticker, api_key, as_of=None):
+        assert ticker == "AAPL"
+        assert api_key == "test-key"
+        assert as_of == date(2026, 5, 1)
+        return pd.DataFrame(
+            [
+                {
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                    "sic_code": "3571",
+                    "sic_description": "ELECTRONIC COMPUTERS",
+                }
+            ]
+        )
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    monkeypatch.setattr("market_data.datasets.ticker_details.download_ticker_details", fake_download_ticker_details)
+
+    exit_code = ticker_details_main(
+        [
+            "--date",
+            "2026-05-01",
+            "--input-dir",
+            str(tmp_path),
+            "--calls-per-minute",
+            "0",
+        ]
+    )
+    details = pd.read_parquet(tmp_path / "ticker_details.parquet")
+    metadata = json.loads((tmp_path / "ticker_details.metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert details["ticker"].tolist() == ["AAPL"]
+    assert details["sic_code"].tolist() == ["3571"]
+    assert "sector" not in details.columns
+    assert metadata["provider"] == "massive"
+    assert metadata["dataset"] == "ticker_details"
+    assert metadata["requested_tickers"] == 1
 
 
 def test_write_daily_snapshot_writes_parquet_and_metadata(tmp_path):

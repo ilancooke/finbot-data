@@ -90,6 +90,30 @@ Ticker pagination is paced at 5 calls per minute by default. Use `--calls-per-mi
 
 The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
 
+## Ticker Details
+
+Download Massive ticker overview details for the filtered ticker universe:
+
+```bash
+python scripts/download_ticker_details.py
+```
+
+Point-in-time details:
+
+```bash
+python scripts/download_ticker_details.py --date 2026-05-01
+```
+
+Ticker details are fetched one symbol at a time from Massive's Ticker Overview endpoint, so the job is much slower than the ticker universe download on the free 5-calls-per-minute plan. By default, the script reads `data/reference/tickers.parquet`, reuses any existing rows in `data/reference/ticker_details.parquet`, and fetches only missing tickers. Use `--refresh-all` to refetch every ticker.
+
+Short smoke run:
+
+```bash
+python scripts/download_ticker_details.py --limit 10 --calls-per-minute 0
+```
+
+The script writes `ticker_details.parquet` and `ticker_details.metadata.json` in `data/reference` by default. It stores Massive-native reference fields, including `sic_code` and `sic_description`; it does not derive sector, GICS, or other feature-engineering labels.
+
 ## Environment
 
 Massive credentials are read from environment variables or from a `.env` file in the current working directory:
@@ -183,6 +207,56 @@ Single-date mode also includes:
 - `filter`
 - `parquet_file`
 
+`ticker_details.parquet` uses this Massive-native ticker details schema:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `ticker` | string | Ticker symbol |
+| `name` | string | Security or company name |
+| `market` | string | Massive market |
+| `locale` | string | Market locale |
+| `primary_exchange` | string | Primary listing exchange |
+| `type` | string | Massive security type |
+| `active` | bool | Whether the ticker is active |
+| `currency_name` | string | Trading currency |
+| `cik` | string | Central Index Key when available |
+| `composite_figi` | string | Composite FIGI when available |
+| `share_class_figi` | string | Share class FIGI when available |
+| `sic_code` | string | Massive-provided SIC code |
+| `sic_description` | string | Massive-provided SIC description |
+| `description` | string | Company description when available |
+| `homepage_url` | string | Company homepage when available |
+| `market_cap` | number | Massive market capitalization when available |
+| `total_employees` | number | Approximate employee count when available |
+| `list_date` | string | Public listing date when available |
+| `delisted_utc` | string | Delisting timestamp when available |
+| `ticker_root` | string | Ticker root when available |
+| `ticker_suffix` | string | Ticker suffix when available |
+| `phone_number` | string | Company phone number when available |
+| `share_class_shares_outstanding` | number | Share-class shares outstanding when available |
+| `weighted_shares_outstanding` | number | Weighted shares outstanding when available |
+| `round_lot` | number | Round lot size when available |
+
+`ticker_details.metadata.json` always includes:
+
+- `collected_date_utc`
+- `collected_at_utc`
+- `provider`
+- `dataset`
+- `mode`
+- `details_date`
+- `input_file`
+- `input_tickers`
+- `cached_tickers`
+- `fetch_candidates`
+- `requested_tickers`
+- `pending_tickers`
+- `fetched_tickers`
+- `missing_tickers`
+- `failed_tickers`
+- `calls_per_minute`
+- `parquet_file`
+
 ## Local Tests
 
 ```bash
@@ -203,7 +277,7 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The container writes daily bars to `/app/data/daily_bars`, which maps to `./data/daily_bars` on the host.
+Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The daily bars service writes to `/app/data/daily_bars`, and the reference-data services write to `/app/data/reference`; these map to `./data/daily_bars` and `./data/reference` on the host.
 
 The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to `./data` are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
@@ -217,6 +291,12 @@ Show ticker universe help:
 
 ```bash
 docker compose run --rm finbot-tickers --help
+```
+
+Show ticker details help:
+
+```bash
+docker compose run --rm finbot-ticker-details --help
 ```
 
 No-network smoke test:
@@ -252,4 +332,16 @@ Download the filtered ticker universe from the container:
 
 ```bash
 docker compose run --rm finbot-tickers
+```
+
+Download ticker details for the first missing 10 tickers from the container:
+
+```bash
+docker compose run --rm finbot-ticker-details --limit 10 --calls-per-minute 5
+```
+
+Refetch ticker details for 10 tickers from the container:
+
+```bash
+docker compose run --rm finbot-ticker-details --refresh-all --limit 10 --calls-per-minute 5
 ```

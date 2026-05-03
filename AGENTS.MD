@@ -35,6 +35,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Avoid exposing API keys in logs, test output, errors, README examples, or commit messages.
 - Preserve support for `.env` and environment variables.
 - Preserve Docker Compose support for homelab scheduling.
+- When adding a new data-pull script, add a matching Docker Compose service that reuses the shared image, environment, data mount, and Docker entrypoint.
 - When adding a new Massive endpoint, use the shared Massive HTTP client unless there is a clear reason not to.
 - When adding per-symbol jobs, use `data/reference/tickers.parquet` as the ticker universe input instead of hardcoding ticker lists.
 
@@ -55,6 +56,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Compose mounts host `./data` to container `/app/data`.
 - The Docker entrypoint creates output directories, fixes ownership, then drops privileges to `HOST_UID:HOST_GID`.
 - Compose passes `HOST_UID` and `HOST_GID` into the container so output files are host-user owned instead of root-owned.
+- Each focused data-pull script should have a dedicated Compose service for manual and scheduled operation; adding scheduling itself is separate work and should only be done when requested.
 - If code, dependencies, `Dockerfile`, or `compose.yaml` change, rebuild the image before running the job.
 - `.env` changes do not require rebuilding the image.
 
