@@ -11,5 +11,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY market_data ./market_data
 COPY scripts ./scripts
 
-ENTRYPOINT ["python"]
-CMD ["scripts/download_daily_bars.py", "--help"]
+ENTRYPOINT ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_daily_bars.py"]
+CMD ["--help"]

@@ -203,9 +203,9 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The container writes to `/app/data/daily_bars`, which maps to `./data/daily_bars` on the host.
+Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The container writes daily bars to `/app/data/daily_bars`, which maps to `./data/daily_bars` on the host.
 
-Compose runs containers as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to `./data` are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env`; use `id -u` and `id -g` to find the values for each machine.
+The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to `./data` are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
 Show script help from the container:
 

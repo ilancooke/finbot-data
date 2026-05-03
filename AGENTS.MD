@@ -53,7 +53,8 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Containers are intended for scheduled homelab operation.
 - Compose reads `.env` for `MASSIVE_API_KEY`.
 - Compose mounts host `./data` to container `/app/data`.
-- Compose uses `HOST_UID` and `HOST_GID` so output files are host-user owned instead of root-owned.
+- The Docker entrypoint creates output directories, fixes ownership, then drops privileges to `HOST_UID:HOST_GID`.
+- Compose passes `HOST_UID` and `HOST_GID` into the container so output files are host-user owned instead of root-owned.
 - If code, dependencies, `Dockerfile`, or `compose.yaml` change, rebuild the image before running the job.
 - `.env` changes do not require rebuilding the image.
 
