@@ -1,13 +1,23 @@
-services:
-  finbot-data:
+x-finbot-data-job: &finbot-data-job
     build: .
     image: finbot-data:local
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       MASSIVE_API_KEY: ${MASSIVE_API_KEY:?Set MASSIVE_API_KEY in .env}
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       FINBOT_RAW_BARS_DIR: /app/data/daily_bars
+      FINBOT_REFERENCE_DIR: /app/data/reference
       FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
       MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-5}
     volumes:
       - ./data:/app/data
+
+services:
+  finbot-data:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/download_daily_bars.py"]
     command: ["--help"]
+
+  finbot-tickers:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/download_tickers.py"]

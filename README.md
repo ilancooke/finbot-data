@@ -26,6 +26,8 @@ Dependencies are intentionally limited to the active downloader and its tests:
 - `scripts/`: command-line entrypoints.
 - `market_data/datasets/`: dataset-specific orchestration such as daily bars.
 - `market_data/providers/`: provider API clients such as Massive.
+- `market_data/http.py`: shared Massive HTTP, pagination, retry, and sanitized error handling.
+- `market_data/universe.py`: ticker universe fetching, filtering, and parquet helpers for per-symbol jobs.
 - `market_data/storage.py`: shared parquet and metadata writing.
 - `market_data/config.py`: environment and `.env` helpers.
 - `tests/`: local test suite.
@@ -70,6 +72,24 @@ The script writes:
 
 If `historical.parquet` already exists in replace mode, it is atomically replaced by the freshly downloaded window. Single-day mode also writes a fresh one-day snapshot and is intended for smoke/debug runs.
 
+## Ticker Universe
+
+Download the current active US common-stock universe:
+
+```bash
+python scripts/download_tickers.py
+```
+
+Point-in-time universe:
+
+```bash
+python scripts/download_tickers.py --date 2026-05-01
+```
+
+Ticker pagination is paced at 5 calls per minute by default. Use `--calls-per-minute 0` to disable pacing on a paid plan.
+
+The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
+
 ## Environment
 
 Massive credentials are read from environment variables or from a `.env` file in the current working directory:
@@ -83,6 +103,7 @@ MASSIVE_API_KEY=...
 Supported Finbot environment variables:
 
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
 - `FINBOT_HISTORY_YEARS`: default history window for `--end-date` mode. Defaults to `2`.
 - `MASSIVE_CALLS_PER_MINUTE`: default request pacing. Defaults to `5`.
@@ -129,6 +150,39 @@ Single-date mode also includes:
 
 - `data_date`
 
+`tickers.parquet` uses this ticker universe schema:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `ticker` | string | Ticker symbol |
+| `name` | string | Security name |
+| `market` | string | Massive market |
+| `locale` | string | Market locale |
+| `primary_exchange` | string | Primary listing exchange |
+| `type` | string | Massive security type |
+| `active` | bool | Whether the ticker is active |
+| `currency_name` | string | Trading currency |
+| `cik` | string | Central Index Key when available |
+| `composite_figi` | string | Composite FIGI when available |
+| `share_class_figi` | string | Share class FIGI when available |
+| `last_updated_utc` | string | Massive reference timestamp |
+
+`tickers.metadata.json` always includes:
+
+- `collected_date_utc`
+- `collected_at_utc`
+- `provider`
+- `dataset`
+- `mode`
+- `universe_date`
+- `rows`
+- `tickers`
+- `input_rows`
+- `output_rows`
+- `calls_per_minute`
+- `filter`
+- `parquet_file`
+
 ## Local Tests
 
 ```bash
@@ -151,10 +205,18 @@ docker compose build
 
 Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The container writes to `/app/data/daily_bars`, which maps to `./data/daily_bars` on the host.
 
-Show the script help from the container:
+Compose runs containers as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to `./data` are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env`; use `id -u` and `id -g` to find the values for each machine.
+
+Show script help from the container:
 
 ```bash
-docker compose run --rm finbot-data
+docker compose run --rm finbot-data --help
+```
+
+Show ticker universe help:
+
+```bash
+docker compose run --rm finbot-tickers --help
 ```
 
 No-network smoke test:
@@ -184,4 +246,10 @@ For a scheduled homelab run, let the host provide the date:
 ```bash
 docker compose run --rm \
   finbot-data --end-date "$(date +%F)" --years 2 --calls-per-minute 5
+```
+
+Download the filtered ticker universe from the container:
+
+```bash
+docker compose run --rm finbot-tickers
 ```
