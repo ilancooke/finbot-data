@@ -489,6 +489,40 @@ def test_download_related_tickers_snapshot_writes_replace_snapshot(tmp_path, mon
     assert metadata["empty_tickers"] == ["MSFT"]
 
 
+def test_download_related_tickers_snapshot_keeps_failures_out_of_empty_tickers(tmp_path, monkeypatch):
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, tmp_path, metadata={"provider": "massive"})
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+
+    def fake_downloader(ticker, api_key):
+        assert api_key == "test-key"
+        if ticker == "AAPL":
+            raise RuntimeError("provider auth failed")
+        return pd.DataFrame(columns=RELATED_TICKER_COLUMNS)
+
+    download_related_tickers_snapshot(
+        input_dir=tmp_path,
+        output_dir=tmp_path,
+        calls_per_minute=0,
+        downloader=fake_downloader,
+    )
+    metadata = json.loads((tmp_path / "related_tickers.metadata.json").read_text(encoding="utf-8"))
+
+    assert metadata["empty_tickers"] == ["MSFT"]
+    assert metadata["failed_tickers"] == [
+        {
+            "ticker": "AAPL",
+            "error_type": "RuntimeError",
+            "message": "provider auth failed",
+        }
+    ]
+
+
 def test_download_related_tickers_cli_writes_related_rows(tmp_path, monkeypatch):
     tickers = normalize_tickers(
         [
@@ -569,6 +603,21 @@ def test_download_script_writes_empty_snapshot_when_network_disabled(tmp_path, m
     assert bars.empty
     assert metadata["data_date"] == "2026-05-02"
     assert metadata["rows"] == 0
+
+
+def test_daily_bars_default_output_can_resolve_from_data_root(tmp_path, monkeypatch):
+    monkeypatch.delenv("FINBOT_RAW_BARS_DIR", raising=False)
+    monkeypatch.setenv("FINBOT_DATA_ROOT", str(tmp_path))
+
+    assert daily_bars.resolve_output_dir(None) == tmp_path / "market/daily_bars"
+
+
+def test_dataset_specific_output_dir_env_overrides_data_root(tmp_path, monkeypatch):
+    raw_bars_dir = tmp_path / "legacy-bars"
+    monkeypatch.setenv("FINBOT_DATA_ROOT", str(tmp_path / "root"))
+    monkeypatch.setenv("FINBOT_RAW_BARS_DIR", str(raw_bars_dir))
+
+    assert daily_bars.resolve_output_dir(None) == raw_bars_dir
 
 
 def test_download_script_supports_days_window_when_network_disabled(tmp_path, monkeypatch):

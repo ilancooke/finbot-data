@@ -6,12 +6,13 @@ x-finbot-data-job: &finbot-data-job
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       HOST_UID: ${HOST_UID:-1000}
       HOST_GID: ${HOST_GID:-1000}
-      FINBOT_RAW_BARS_DIR: /app/data/daily_bars
-      FINBOT_REFERENCE_DIR: /app/data/reference
+      FINBOT_DATA_ROOT: /data
+      FINBOT_RAW_BARS_DIR: /data/market/daily_bars
+      FINBOT_REFERENCE_DIR: /data/reference
       FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
       MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-5}
     volumes:
-      - ./data:/app/data
+      - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
 
 services:
   finbot-data:

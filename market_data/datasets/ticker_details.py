@@ -10,7 +10,7 @@ from typing import Callable, Any
 
 import pandas as pd
 
-from market_data.config import get_env
+from market_data.config import get_env, resolve_finbot_data_path
 from market_data.http import MassiveClient
 from market_data.providers.massive import TICKER_DETAIL_COLUMNS, download_ticker_details
 from market_data.universe import read_ticker_universe
@@ -26,9 +26,12 @@ TickerDetailsDownloader = Callable[[str, str, date | None], pd.DataFrame]
 
 
 def resolve_reference_dir(reference_dir: str | Path | None) -> Path:
-    if reference_dir is not None:
-        return Path(reference_dir)
-    return Path(os.getenv("FINBOT_REFERENCE_DIR", str(DEFAULT_REFERENCE_DIR)))
+    return resolve_finbot_data_path(
+        reference_dir,
+        env_key="FINBOT_REFERENCE_DIR",
+        default_path=DEFAULT_REFERENCE_DIR,
+        data_root_subpath="reference",
+    )
 
 
 def default_calls_per_minute() -> float:

@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from market_data.config import get_env
+from market_data.config import get_env, resolve_finbot_data_path
 from market_data.http import MassiveClient
 from market_data.universe import (
     LISTED_PRIMARY_EXCHANGES,
@@ -42,9 +42,12 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def _resolve_output_dir(output_dir: str | Path | None) -> Path:
-    if output_dir is not None:
-        return Path(output_dir)
-    return Path(os.getenv("FINBOT_REFERENCE_DIR", str(DEFAULT_OUTPUT_DIR)))
+    return resolve_finbot_data_path(
+        output_dir,
+        env_key="FINBOT_REFERENCE_DIR",
+        default_path=DEFAULT_OUTPUT_DIR,
+        data_root_subpath="reference",
+    )
 
 
 def _get_massive_api_key() -> str:

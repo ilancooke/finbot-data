@@ -31,3 +31,25 @@ def get_env(key: str, default: str = "", dotenv_path: Path | None = None) -> str
         return dotenv_value
 
     return default
+
+
+def resolve_finbot_data_path(
+    explicit_path: str | Path | None,
+    env_key: str,
+    default_path: str | Path,
+    data_root_subpath: str | Path,
+) -> Path:
+    """Resolve a dataset path from CLI, dataset env var, data root, or legacy default."""
+
+    if explicit_path is not None:
+        return Path(explicit_path)
+
+    env_value = get_env(env_key)
+    if env_value:
+        return Path(env_value)
+
+    data_root = get_env("FINBOT_DATA_ROOT")
+    if data_root:
+        return Path(data_root) / data_root_subpath
+
+    return Path(default_path)

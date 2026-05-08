@@ -9,7 +9,7 @@ from typing import Callable
 
 import pandas as pd
 
-from market_data.config import get_env
+from market_data.config import get_env, resolve_finbot_data_path
 from market_data.normalize import BAR_COLUMNS
 from market_data.providers.massive import download_grouped_daily_bars
 from market_data.storage import write_daily_snapshot, write_historical_snapshot
@@ -27,9 +27,12 @@ def network_disabled() -> bool:
 
 
 def resolve_output_dir(output_dir: str | Path | None) -> Path:
-    if output_dir is not None:
-        return Path(output_dir)
-    return Path(os.getenv("FINBOT_RAW_BARS_DIR", str(DEFAULT_OUTPUT_DIR)))
+    return resolve_finbot_data_path(
+        output_dir,
+        env_key="FINBOT_RAW_BARS_DIR",
+        default_path=DEFAULT_OUTPUT_DIR,
+        data_root_subpath=Path("market/daily_bars"),
+    )
 
 
 def default_years() -> int:

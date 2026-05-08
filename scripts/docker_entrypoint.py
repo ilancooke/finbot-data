@@ -9,7 +9,7 @@ import sys
 
 DEFAULT_UID = 1000
 DEFAULT_GID = 1000
-DATA_ROOT = Path("/app/data")
+DEFAULT_DATA_ROOT = Path("/data")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -21,10 +21,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _output_dirs() -> list[Path]:
+    data_root = Path(os.getenv("FINBOT_DATA_ROOT", str(DEFAULT_DATA_ROOT)))
     return [
-        DATA_ROOT,
-        Path(os.getenv("FINBOT_RAW_BARS_DIR", "/app/data/daily_bars")),
-        Path(os.getenv("FINBOT_REFERENCE_DIR", "/app/data/reference")),
+        data_root,
+        Path(os.getenv("FINBOT_RAW_BARS_DIR", str(data_root / "market/daily_bars"))),
+        Path(os.getenv("FINBOT_REFERENCE_DIR", str(data_root / "reference"))),
     ]
 
 
@@ -44,10 +45,11 @@ def _chown_tree(path: Path, uid: int, gid: int) -> None:
 
 
 def _prepare_data_dirs(uid: int, gid: int) -> None:
+    data_root = Path(os.getenv("FINBOT_DATA_ROOT", str(DEFAULT_DATA_ROOT)))
     for output_dir in _output_dirs():
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    _chown_tree(DATA_ROOT, uid, gid)
+    _chown_tree(data_root, uid, gid)
 
 
 def _drop_privileges(uid: int, gid: int) -> None:

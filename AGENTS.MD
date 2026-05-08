@@ -32,6 +32,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Put reusable logic in `market_data/`; keep files in `scripts/` as thin CLI entrypoints.
 - Keep output files under `data/` by default.
 - Write parquet data plus sidecar metadata JSON for durable datasets.
+- Prefer `FINBOT_DATA_ROOT` for shared multipackage deployments. Keep dataset-specific env vars such as `FINBOT_RAW_BARS_DIR` and `FINBOT_REFERENCE_DIR` as explicit overrides.
 - Avoid exposing API keys in logs, test output, errors, README examples, or commit messages.
 - Preserve support for `.env` and environment variables.
 - Preserve Docker Compose support for homelab scheduling.
@@ -43,8 +44,10 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 
 - Daily bars are currently maintained as a replace-style historical snapshot.
 - The default daily bars output is `data/daily_bars/historical.parquet`.
+- When `FINBOT_DATA_ROOT` is set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars/historical.parquet`.
 - The daily bars metadata file is `data/daily_bars/historical.metadata.json`.
 - The ticker universe output is `data/reference/tickers.parquet`.
+- When `FINBOT_DATA_ROOT` is set, reference datasets default to `FINBOT_DATA_ROOT/reference`.
 - The ticker universe metadata file is `data/reference/tickers.metadata.json`.
 - For duplicate `symbol,date` rows in daily bars, keep the newest downloaded row.
 - For Massive adjusted grouped bars, remember that adjusted volume may be fractional because Massive adjusts volume along with prices.
@@ -53,7 +56,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 
 - Containers are intended for scheduled homelab operation.
 - Compose reads `.env` for `MASSIVE_API_KEY`.
-- Compose mounts host `./data` to container `/app/data`.
+- Compose mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to container `/data`.
 - The Docker entrypoint creates output directories, fixes ownership, then drops privileges to `HOST_UID:HOST_GID`.
 - Compose passes `HOST_UID` and `HOST_GID` into the container so output files are host-user owned instead of root-owned.
 - Each focused data-pull script should have a dedicated Compose service for manual and scheduled operation; adding scheduling itself is separate work and should only be done when requested.

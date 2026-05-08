@@ -40,6 +40,8 @@ Use the script directly from the repository root:
 python scripts/download_daily_bars.py --end-date 2026-05-01 --years 2
 ```
 
+By default, local script runs write under this repository's `data/` directory. For a shared multipackage data root, set `FINBOT_DATA_ROOT`; daily bars then write to `FINBOT_DATA_ROOT/market/daily_bars` unless `FINBOT_RAW_BARS_DIR` is set.
+
 The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, then replaces the existing snapshot. With the free Massive plan, the default 2-year window is expected to take about 100 minutes because the script paces requests at 5 calls per minute. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
 
 The script requests weekdays in the date window. It does not use a NYSE holiday calendar; holidays and other dates with no returned data are recorded in `empty_market_dates`.
@@ -51,7 +53,7 @@ Arguments:
 - `--days N`: history window in calendar days, useful for short test runs. Cannot be combined with `--years`.
 - `--calls-per-minute N`: request pacing for Massive. Defaults to `5`; use `0` to disable pacing on a paid plan.
 - `--date YYYY-MM-DD`: optional single-day smoke/debug mode instead of `--end-date`.
-- `--output-dir PATH`: optional output directory. Defaults to `data/daily_bars`.
+- `--output-dir PATH`: optional output directory. Defaults to `data/daily_bars`, or `FINBOT_DATA_ROOT/market/daily_bars` when `FINBOT_DATA_ROOT` is set.
 
 Example with an explicit output directory:
 
@@ -88,7 +90,7 @@ python scripts/download_tickers.py --date 2026-05-01
 
 Ticker pagination is paced at 5 calls per minute by default. Use `--calls-per-minute 0` to disable pacing on a paid plan.
 
-The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
+The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
 
 ## Ticker Details
 
@@ -104,7 +106,7 @@ Point-in-time details:
 python scripts/download_ticker_details.py --date 2026-05-01
 ```
 
-Ticker details are fetched one symbol at a time from Massive's Ticker Overview endpoint, so the job is much slower than the ticker universe download on the free 5-calls-per-minute plan. By default, the script reads `data/reference/tickers.parquet`, reuses any existing rows in `data/reference/ticker_details.parquet`, and fetches only missing tickers. Use `--refresh-all` to refetch every ticker.
+Ticker details are fetched one symbol at a time from Massive's Ticker Overview endpoint, so the job is much slower than the ticker universe download on the free 5-calls-per-minute plan. By default, the script reads `data/reference/tickers.parquet`, reuses any existing rows in `data/reference/ticker_details.parquet`, and fetches only missing tickers. With `FINBOT_DATA_ROOT` set, those paths move to `FINBOT_DATA_ROOT/reference`. Use `--refresh-all` to refetch every ticker.
 
 Short smoke run:
 
@@ -112,7 +114,7 @@ Short smoke run:
 python scripts/download_ticker_details.py --limit 10 --calls-per-minute 0
 ```
 
-The script writes `ticker_details.parquet` and `ticker_details.metadata.json` in `data/reference` by default. It stores Massive-native reference fields, including `sic_code` and `sic_description`; it does not derive sector, GICS, or other feature-engineering labels.
+The script writes `ticker_details.parquet` and `ticker_details.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. It stores Massive-native reference fields, including `sic_code` and `sic_description`; it does not derive sector, GICS, or other feature-engineering labels.
 
 ## Related Tickers
 
@@ -130,7 +132,7 @@ Short smoke run:
 python scripts/download_related_tickers.py --limit 10 --calls-per-minute 0
 ```
 
-The script writes `related_tickers.parquet` and `related_tickers.metadata.json` in `data/reference` by default. The parquet stores source ticker to related ticker rows and preserves the result order returned by Massive; it does not derive peer groups, scores, or portfolio labels.
+The script writes `related_tickers.parquet` and `related_tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet stores source ticker to related ticker rows and preserves the result order returned by Massive; it does not derive peer groups, scores, or portfolio labels.
 
 ## Environment
 
@@ -144,6 +146,7 @@ MASSIVE_API_KEY=...
 
 Supported Finbot environment variables:
 
+- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars` and reference datasets default to `FINBOT_DATA_ROOT/reference`.
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
@@ -323,9 +326,9 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for Massive credentials and mounts local `./data` to `/app/data` in the container, so output files persist on the host. The daily bars service writes to `/app/data/daily_bars`, and the reference-data services write to `/app/data/reference`; these map to `./data/daily_bars` and `./data/reference` on the host.
+Compose reads `.env` for Massive credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. The daily bars service writes to `/data/market/daily_bars`, and the reference-data services write to `/data/reference`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
 
-The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to `./data` are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
+The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to the mounted data root are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
 Show script help from the container:
 
