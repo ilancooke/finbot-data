@@ -27,6 +27,22 @@ TICKER_COLUMNS = [
 ]
 
 LISTED_PRIMARY_EXCHANGES = {"XNYS", "XNAS", "ARCX", "XASE", "BATS"}
+DEVELOPMENT_TICKER_UNIVERSE = [
+    "GOOGL",
+    "AMD",
+    "META",
+    "MSFT",
+    "GOOG",
+    "AMZN",
+    "TSLA",
+    "AAPL",
+    "AVGO",
+    "INTC",
+    "NVDA",
+    "NFLX",
+    "SNAP",
+    "ORCL",
+]
 
 
 def normalize_tickers(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -89,6 +105,19 @@ def filter_common_stocks(tickers: pd.DataFrame) -> pd.DataFrame:
         .sort_values("ticker")
         .reset_index(drop=True)
     )
+
+
+def filter_development_ticker_universe(
+    tickers: pd.DataFrame,
+    allowed_tickers: list[str] | tuple[str, ...] = DEVELOPMENT_TICKER_UNIVERSE,
+) -> pd.DataFrame:
+    """Temporarily limit the ticker universe while Finbot is in development."""
+
+    if tickers.empty:
+        return pd.DataFrame(columns=tickers.columns)
+
+    allowed = {ticker.upper() for ticker in allowed_tickers}
+    return tickers[tickers["ticker"].isin(allowed)].copy().sort_values("ticker").reset_index(drop=True)
 
 
 def write_ticker_universe(

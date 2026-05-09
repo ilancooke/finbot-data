@@ -18,16 +18,18 @@ if str(PROJECT_ROOT) not in sys.path:
 from market_data.config import get_env, resolve_finbot_data_path
 from market_data.http import MassiveClient
 from market_data.universe import (
+    DEVELOPMENT_TICKER_UNIVERSE,
     LISTED_PRIMARY_EXCHANGES,
     fetch_ticker_universe,
     filter_common_stocks,
+    filter_development_ticker_universe,
     write_ticker_universe,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path("data/reference")
-DEFAULT_CALLS_PER_MINUTE = 5
+DEFAULT_CALLS_PER_MINUTE = 0
 
 
 def configure_logging(level: int = logging.INFO) -> None:
@@ -106,8 +108,10 @@ def download_tickers(
         calls_per_minute=calls_per_minute,
     )
     common_stocks = filter_common_stocks(tickers)
+    development_universe = filter_development_ticker_universe(common_stocks)
+    missing_development_tickers = sorted(set(DEVELOPMENT_TICKER_UNIVERSE) - set(development_universe["ticker"].tolist()))
     output_path = write_ticker_universe(
-        common_stocks,
+        development_universe,
         _resolve_output_dir(output_dir),
         metadata={
             "provider": "massive",
@@ -115,7 +119,8 @@ def download_tickers(
             "mode": "replace",
             "universe_date": universe_date.isoformat() if universe_date else "latest",
             "input_rows": int(len(tickers)),
-            "output_rows": int(len(common_stocks)),
+            "common_stock_rows": int(len(common_stocks)),
+            "output_rows": int(len(development_universe)),
             "calls_per_minute": calls_per_minute,
             "filter": {
                 "type": "CS",
@@ -123,14 +128,17 @@ def download_tickers(
                 "market": "stocks",
                 "locale": "us",
                 "primary_exchanges": sorted(LISTED_PRIMARY_EXCHANGES),
+                "development_tickers": DEVELOPMENT_TICKER_UNIVERSE,
+                "missing_development_tickers": missing_development_tickers,
             },
         },
     )
     logger.info(
-        "Downloaded Massive common stock universe date=%s input_rows=%d output_rows=%d calls_per_minute=%.3g output=%s",
+        "Downloaded Massive common stock universe date=%s input_rows=%d common_stock_rows=%d output_rows=%d calls_per_minute=%.3g output=%s",
         universe_date.isoformat() if universe_date else "latest",
         len(tickers),
         len(common_stocks),
+        len(development_universe),
         calls_per_minute,
         output_path,
     )

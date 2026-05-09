@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path("data/daily_bars")
 DEFAULT_HISTORY_YEARS = 2
-DEFAULT_CALLS_PER_MINUTE = 5
+DEFAULT_CALLS_PER_MINUTE = 0
 TRUTHY_VALUES = {"1", "true", "yes"}
 
 

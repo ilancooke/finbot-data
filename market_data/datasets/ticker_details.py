@@ -18,7 +18,7 @@ from market_data.universe import read_ticker_universe
 logger = logging.getLogger(__name__)
 
 DEFAULT_REFERENCE_DIR = Path("data/reference")
-DEFAULT_CALLS_PER_MINUTE = 5
+DEFAULT_CALLS_PER_MINUTE = 0
 DETAILS_PARQUET_FILE = "ticker_details.parquet"
 DETAILS_METADATA_FILE = "ticker_details.metadata.json"
 

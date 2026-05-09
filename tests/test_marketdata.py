@@ -7,6 +7,7 @@ import pandas as pd
 
 from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.datasets.financials import download_financials_history, read_financial_statement
 from market_data.datasets.ratios import download_ratios_snapshot, read_ratios
 from market_data.datasets.related_tickers import download_related_tickers_snapshot, read_related_tickers
 from market_data.datasets.ticker_details import (
@@ -17,9 +18,13 @@ from market_data.datasets.ticker_details import (
 from market_data.http import MassiveClient, MassiveHttpError
 from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
 from market_data.providers.massive import (
+    BALANCE_SHEET_COLUMNS,
+    CASH_FLOW_STATEMENT_COLUMNS,
+    INCOME_STATEMENT_COLUMNS,
     RATIO_COLUMNS,
     RELATED_TICKER_COLUMNS,
     TICKER_DETAIL_COLUMNS,
+    normalize_financial_statement_response,
     normalize_grouped_daily_response,
     normalize_ratios_response,
     normalize_related_tickers_response,
@@ -27,13 +32,16 @@ from market_data.providers.massive import (
 )
 from market_data.storage import write_daily_snapshot
 from market_data.universe import (
+    DEVELOPMENT_TICKER_UNIVERSE,
     fetch_ticker_universe,
+    filter_development_ticker_universe,
     filter_common_stocks,
     normalize_tickers,
     read_ticker_universe,
     write_ticker_universe,
 )
 from scripts.download_daily_bars import main
+from scripts.download_financials import main as financials_main
 from scripts.download_ratios import main as ratios_main
 from scripts.download_related_tickers import main as related_tickers_main
 from scripts.download_ticker_details import main as ticker_details_main
@@ -184,6 +192,21 @@ def test_filter_common_stocks_keeps_active_listed_us_common_stocks():
     assert filtered["ticker"].tolist() == ["AAPL"]
 
 
+def test_filter_development_ticker_universe_keeps_only_configured_development_symbols():
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "market": "stocks"},
+            {"ticker": "msft", "market": "stocks"},
+            {"ticker": "IBM", "market": "stocks"},
+        ]
+    )
+
+    filtered = filter_development_ticker_universe(tickers)
+
+    assert filtered["ticker"].tolist() == ["AAPL", "MSFT"]
+    assert "IBM" not in DEVELOPMENT_TICKER_UNIVERSE
+
+
 def test_write_and_read_ticker_universe(tmp_path):
     tickers = normalize_tickers(
         [
@@ -251,9 +274,12 @@ def test_download_tickers_cli_writes_universe(tmp_path, monkeypatch):
     assert metadata["mode"] == "replace"
     assert metadata["universe_date"] == "2026-05-01"
     assert metadata["input_rows"] == 2
+    assert metadata["common_stock_rows"] == 1
     assert metadata["output_rows"] == 1
     assert metadata["rows"] == 1
     assert metadata["filter"]["type"] == "CS"
+    assert metadata["filter"]["development_tickers"] == DEVELOPMENT_TICKER_UNIVERSE
+    assert "AAPL" not in metadata["filter"]["missing_development_tickers"]
 
 
 def test_normalize_massive_grouped_daily_response_uses_canonical_schema():
@@ -487,6 +513,177 @@ def test_normalize_massive_ratios_response_uses_latest_ratios_schema():
     assert normalized.loc[0, "ticker"] == "AAPL"
     assert normalized.loc[0, "date"] == date(2024, 9, 19)
     assert normalized.loc[0, "price_to_earnings"] == 34.84
+
+
+def test_normalize_financial_statement_response_expands_to_universe_tickers_and_nulls_missing_fields():
+    payload = {
+        "status": "OK",
+        "results": [
+            {
+                "cik": "0000320193",
+                "tickers": ["aapl", "AAPL.B"],
+                "period_end": "2025-06-28",
+                "filing_date": "2025-08-01",
+                "fiscal_year": 2025,
+                "fiscal_quarter": 3,
+                "timeframe": "quarterly",
+                "total_assets": 331495000000,
+            }
+        ],
+    }
+
+    normalized = normalize_financial_statement_response(payload, "balance_sheets", ticker_universe={"AAPL"})
+
+    assert list(normalized.columns) == BALANCE_SHEET_COLUMNS
+    assert normalized["ticker"].tolist() == ["AAPL"]
+    assert normalized.loc[0, "period_end"] == date(2025, 6, 28)
+    assert normalized.loc[0, "filing_date"] == date(2025, 8, 1)
+    assert normalized.loc[0, "tickers"] == ["AAPL", "AAPL.B"]
+    assert normalized.loc[0, "total_assets"] == 331495000000
+    assert pd.isna(normalized.loc[0, "accounts_payable"])
+
+
+def test_financial_statement_schemas_include_documented_statement_fields():
+    assert "total_liabilities_and_equity" in BALANCE_SHEET_COLUMNS
+    assert "net_cash_from_operating_activities" in CASH_FLOW_STATEMENT_COLUMNS
+    assert "revenue" in INCOME_STATEMENT_COLUMNS
+
+
+def test_download_financials_history_writes_statement_files_for_ticker_universe(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    financials_dir = tmp_path / "financials"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    calls = []
+
+    def fake_downloader(statement, api_key, start_date, end_date, batch, limit, calls_per_minute):
+        calls.append((statement, batch))
+        assert api_key == "test-key"
+        assert start_date == date(2024, 5, 2)
+        assert end_date == date(2026, 5, 1)
+        assert limit == 100
+        assert calls_per_minute == 0
+        if statement == "balance_sheets":
+            return [
+                {
+                    "cik": "0000320193",
+                    "tickers": ["AAPL"],
+                    "period_end": "2025-06-28",
+                    "filing_date": "2025-08-01",
+                    "fiscal_year": 2025,
+                    "fiscal_quarter": 3,
+                    "timeframe": "quarterly",
+                    "total_assets": 331495000000,
+                },
+                {
+                    "cik": "0000000000",
+                    "tickers": ["SPY"],
+                    "period_end": "2025-06-28",
+                    "timeframe": "quarterly",
+                    "total_assets": 1,
+                },
+            ]
+        return []
+
+    output_paths = download_financials_history(
+        end_date=date(2026, 5, 1),
+        years=2,
+        statements=["balance_sheets"],
+        input_dir=reference_dir,
+        output_dir=financials_dir,
+        calls_per_minute=0,
+        limit=100,
+        ticker_batch_size=2,
+        downloader=fake_downloader,
+    )
+    balance_sheets = read_financial_statement(financials_dir, "balance_sheets")
+    metadata = json.loads((financials_dir / "balance_sheets.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_paths["balance_sheets"] == financials_dir / "balance_sheets.parquet"
+    assert calls == [("balance_sheets", ["AAPL", "MSFT"])]
+    assert balance_sheets["ticker"].tolist() == ["AAPL"]
+    assert balance_sheets["total_assets"].tolist() == [331495000000]
+    assert metadata["provider"] == "massive"
+    assert metadata["dataset"] == "balance_sheets"
+    assert metadata["mode"] == "replace"
+    assert metadata["requested_start_date"] == "2024-05-02"
+    assert metadata["requested_end_date"] == "2026-05-01"
+    assert metadata["history_years"] == 2
+    assert metadata["input_tickers"] == 2
+    assert metadata["requested_tickers"] == 2
+    assert metadata["raw_rows"] == 2
+    assert metadata["output_rows"] == 1
+    assert metadata["data_min_period_end"] == "2025-06-28"
+    assert metadata["data_max_period_end"] == "2025-06-28"
+
+
+def test_download_financials_cli_writes_selected_statement(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    financials_dir = tmp_path / "financials"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+
+    def fake_download_financial_statement_rows(statement, api_key, start_date, end_date, tickers, limit=50000, calls_per_minute=0):
+        assert statement == "income_statements"
+        assert api_key == "test-key"
+        assert start_date == date(2025, 5, 2)
+        assert end_date == date(2026, 5, 1)
+        assert tickers == ["AAPL"]
+        assert limit == 100
+        assert calls_per_minute == 0
+        return [
+            {
+                "cik": "0000320193",
+                "tickers": ["AAPL"],
+                "period_end": "2025-06-28",
+                "filing_date": "2025-08-01",
+                "fiscal_year": 2025,
+                "fiscal_quarter": 3,
+                "timeframe": "quarterly",
+                "revenue": 94036000000,
+            }
+        ]
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    monkeypatch.setattr("market_data.datasets.financials.download_financial_statement_rows", fake_download_financial_statement_rows)
+
+    exit_code = financials_main(
+        [
+            "--end-date",
+            "2026-05-01",
+            "--years",
+            "1",
+            "--statement",
+            "income_statements",
+            "--input-dir",
+            str(reference_dir),
+            "--output-dir",
+            str(financials_dir),
+            "--calls-per-minute",
+            "0",
+            "--limit",
+            "100",
+        ]
+    )
+    income_statements = pd.read_parquet(financials_dir / "income_statements.parquet")
+    metadata = json.loads((financials_dir / "income_statements.metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert income_statements["ticker"].tolist() == ["AAPL"]
+    assert income_statements["revenue"].tolist() == [94036000000]
+    assert metadata["dataset"] == "income_statements"
+    assert metadata["requested_start_date"] == "2025-05-02"
+    assert metadata["output_rows"] == 1
 
 
 def test_download_ratios_snapshot_filters_to_ticker_universe(tmp_path, monkeypatch):

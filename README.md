@@ -42,7 +42,7 @@ python scripts/download_daily_bars.py --end-date 2026-05-01 --years 2
 
 By default, local script runs write under this repository's `data/` directory. For a shared multipackage data root, set `FINBOT_DATA_ROOT`; daily bars then write to `FINBOT_DATA_ROOT/market/daily_bars` unless `FINBOT_RAW_BARS_DIR` is set.
 
-The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, then replaces the existing snapshot. With the free Massive plan, the default 2-year window is expected to take about 100 minutes because the script paces requests at 5 calls per minute. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
+The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, then replaces the existing snapshot. By default, request pacing is disabled. Use `--calls-per-minute N` if you need explicit pacing for a lower-throughput plan. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
 
 The script requests weekdays in the date window. It does not use a NYSE holiday calendar; holidays and other dates with no returned data are recorded in `empty_market_dates`.
 
@@ -51,7 +51,7 @@ Arguments:
 - `--end-date YYYY-MM-DD`: inclusive end date for a rolling history replace.
 - `--years N`: history window in years. Defaults to `2`.
 - `--days N`: history window in calendar days, useful for short test runs. Cannot be combined with `--years`.
-- `--calls-per-minute N`: request pacing for Massive. Defaults to `5`; use `0` to disable pacing on a paid plan.
+- `--calls-per-minute N`: request pacing for Massive. Defaults to `0`, which disables built-in pacing.
 - `--date YYYY-MM-DD`: optional single-day smoke/debug mode instead of `--end-date`.
 - `--output-dir PATH`: optional output directory. Defaults to `data/daily_bars`, or `FINBOT_DATA_ROOT/market/daily_bars` when `FINBOT_DATA_ROOT` is set.
 
@@ -88,9 +88,17 @@ Point-in-time universe:
 python scripts/download_tickers.py --date 2026-05-01
 ```
 
-Ticker pagination is paced at 5 calls per minute by default, which waits 12 seconds between paginated calls. Use `--calls-per-minute 0` to disable pacing on a paid plan.
+Ticker pagination is unpaced by default. Use `--calls-per-minute N` if you need explicit pacing.
 
-The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
+The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file first filters to active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
+
+During project development, the ticker universe is temporarily limited to:
+
+```text
+GOOGL, AMD, META, MSFT, GOOG, AMZN, TSLA, AAPL, AVGO, INTC, NVDA, NFLX, SNAP, ORCL
+```
+
+To replace or remove that development filter, update `DEVELOPMENT_TICKER_UNIVERSE` in `market_data/universe.py` and rerun `python scripts/download_tickers.py`.
 
 ## Ticker Details
 
@@ -106,7 +114,7 @@ Point-in-time details:
 python scripts/download_ticker_details.py --date 2026-05-01
 ```
 
-Ticker details are fetched one symbol at a time from Massive's Ticker Overview endpoint, so the job is much slower than the ticker universe download on the free 5-calls-per-minute plan. By default, the script reads `data/reference/tickers.parquet`, reuses any existing rows in `data/reference/ticker_details.parquet`, and fetches only missing tickers. With `FINBOT_DATA_ROOT` set, those paths move to `FINBOT_DATA_ROOT/reference`. Use `--refresh-all` to refetch every ticker.
+Ticker details are fetched one symbol at a time from Massive's Ticker Overview endpoint, so the job is much slower than the ticker universe download. By default, the script reads `data/reference/tickers.parquet`, reuses any existing rows in `data/reference/ticker_details.parquet`, and fetches only missing tickers. With `FINBOT_DATA_ROOT` set, those paths move to `FINBOT_DATA_ROOT/reference`. Use `--refresh-all` to refetch every ticker.
 
 Short smoke run:
 
@@ -154,6 +162,48 @@ python scripts/download_ratios.py --limit 100
 
 The script writes `ratios.parquet` and `ratios.metadata.json` in `data/ratios` by default, or `FINBOT_DATA_ROOT/ratios` when `FINBOT_DATA_ROOT` is set.
 
+## Financial Statements
+
+Download historical Massive financial statements for the filtered ticker universe:
+
+```bash
+python scripts/download_financials.py --end-date 2026-05-01 --years 2
+```
+
+The financials job reads `data/reference/tickers.parquet`, requests statement rows whose `period_end` falls inside the requested history window, filters rows to the active common-stock universe, and writes replace-style historical snapshots. By default it downloads balance sheets, cash flow statements, and income statements.
+
+Download only one statement type:
+
+```bash
+python scripts/download_financials.py --end-date 2026-05-01 --years 2 --statement income_statements
+```
+
+Short smoke run for the first 10 tickers:
+
+```bash
+python scripts/download_financials.py --end-date 2026-05-01 --years 1 --ticker-limit 10 --calls-per-minute 0
+```
+
+The script writes these files in `data/financials` by default, or `FINBOT_DATA_ROOT/financials` when `FINBOT_DATA_ROOT` is set:
+
+- `balance_sheets.parquet` and `balance_sheets.metadata.json`
+- `cash_flow_statements.parquet` and `cash_flow_statements.metadata.json`
+- `income_statements.parquet` and `income_statements.metadata.json`
+
+Each parquet stores one row per ticker, CIK, `period_end`, and `timeframe`. The provider's full `tickers` array is preserved, and documented statement fields that are not present for a company or period are written as nulls.
+
+Arguments:
+
+- `--end-date YYYY-MM-DD`: inclusive `period_end` upper bound. Defaults to today.
+- `--years N`: history window in years. Defaults to `FINBOT_FINANCIALS_HISTORY_YEARS`, then `FINBOT_HISTORY_YEARS`, then `2`.
+- `--statement NAME`: one of `balance_sheets`, `cash_flow_statements`, or `income_statements`. Repeat to download multiple statements. Defaults to all.
+- `--input-dir PATH`: directory containing `tickers.parquet`. Defaults to `data/reference`, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set.
+- `--output-dir PATH`: output directory. Defaults to `data/financials`, or `FINBOT_DATA_ROOT/financials` when `FINBOT_DATA_ROOT` is set.
+- `--ticker-limit N`: optional smoke-test limit for the ticker universe.
+- `--ticker-batch-size N`: ticker count per Massive `tickers.any_of` request. Defaults to `100`.
+- `--limit N`: Massive result limit per request. Defaults to `50000`.
+- `--calls-per-minute N`: request pacing. Defaults to `MASSIVE_FINANCIALS_CALLS_PER_MINUTE` or `0`.
+
 ## Environment
 
 Massive credentials are read from environment variables or from a `.env` file in the current working directory:
@@ -166,16 +216,19 @@ MASSIVE_API_KEY=...
 
 Supported Finbot environment variables:
 
-- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, and ratios default to `FINBOT_DATA_ROOT/ratios`.
+- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, ratios default to `FINBOT_DATA_ROOT/ratios`, and financial statements default to `FINBOT_DATA_ROOT/financials`.
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_RATIOS_DIR`: ratios output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_FINANCIALS_DIR`: financial statements output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
 - `FINBOT_HISTORY_YEARS`: default history window for `--end-date` mode. Defaults to `2`.
-- `MASSIVE_CALLS_PER_MINUTE`: default request pacing. Defaults to `5`.
+- `FINBOT_FINANCIALS_HISTORY_YEARS`: default financial statements history window. Defaults to `FINBOT_HISTORY_YEARS`, then `2`.
+- `MASSIVE_CALLS_PER_MINUTE`: default request pacing. Defaults to `0`.
 - `MASSIVE_RATIOS_CALLS_PER_MINUTE`: default ratios pagination pacing. Defaults to `0`.
+- `MASSIVE_FINANCIALS_CALLS_PER_MINUTE`: default financial statements pagination and ticker-batch pacing. Defaults to `0`.
 
-Massive's free Stocks Basic plan is expected to provide 5 calls per minute, 2 years of historical data, and end-of-day data. Paid plans can use a longer `--years` value and `--calls-per-minute 0`.
+Massive's free Stocks Basic plan was historically expected to provide 5 calls per minute, 2 years of historical data, and end-of-day data. Use `--calls-per-minute N` or `MASSIVE_CALLS_PER_MINUTE` if your current plan needs explicit pacing.
 
 ## Output Schema
 
@@ -245,6 +298,7 @@ Single-date mode also includes:
 - `rows`
 - `tickers`
 - `input_rows`
+- `common_stock_rows`
 - `output_rows`
 - `calls_per_minute`
 - `filter`
@@ -375,6 +429,45 @@ Single-date mode also includes:
 - `data_max_date`
 - `parquet_file`
 
+`balance_sheets.parquet`, `cash_flow_statements.parquet`, and `income_statements.parquet` use Massive-native financial statement fields plus these common columns:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `ticker` | string | Ticker from the filtered Finbot universe matched to the provider statement row |
+| `cik` | string | Central Index Key |
+| `period_end` | date | Last date of the reporting period |
+| `filing_date` | date | SEC filing date when available |
+| `fiscal_year` | number | Fiscal year |
+| `fiscal_quarter` | number | Fiscal quarter |
+| `timeframe` | string | Reporting period type, such as `quarterly`, `annual`, or `trailing_twelve_months` |
+| `tickers` | array[string] | Full Massive ticker list for the reporting company |
+
+Financial statement metadata files always include:
+
+- `collected_date_utc`
+- `collected_at_utc`
+- `provider`
+- `dataset`
+- `mode`
+- `input_file`
+- `input_tickers`
+- `requested_tickers`
+- `partial`
+- `pending_tickers`
+- `requested_start_date`
+- `requested_end_date`
+- `history_years`
+- `raw_rows`
+- `output_rows`
+- `calls_per_minute`
+- `limit`
+- `ticker_batch_size`
+- `rows`
+- `tickers`
+- `data_min_period_end`
+- `data_max_period_end`
+- `parquet_file`
+
 ## Local Tests
 
 ```bash
@@ -395,7 +488,7 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for Massive credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. The daily bars service writes to `/data/market/daily_bars`, the reference-data services write to `/data/reference`, and the ratios service writes to `/data/ratios`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
+Compose reads `.env` for Massive credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. The daily bars service writes to `/data/market/daily_bars`, the reference-data services write to `/data/reference`, the ratios service writes to `/data/ratios`, and the financials service writes to `/data/financials`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
 
 The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to the mounted data root are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
@@ -429,6 +522,12 @@ Show ratios help:
 docker compose run --rm finbot-ratios --help
 ```
 
+Show financials help:
+
+```bash
+docker compose run --rm finbot-financials --help
+```
+
 No-network smoke test:
 
 ```bash
@@ -441,21 +540,21 @@ Short Massive API test:
 
 ```bash
 docker compose run --rm \
-  finbot-data --end-date 2026-05-01 --days 10 --calls-per-minute 5
+  finbot-data --end-date 2026-05-01 --days 10
 ```
 
-Full free-plan history refresh:
+Full history refresh:
 
 ```bash
 docker compose run --rm \
-  finbot-data --end-date 2026-05-01 --years 2 --calls-per-minute 5
+  finbot-data --end-date 2026-05-01 --years 2
 ```
 
 For a scheduled homelab run, let the host provide the date:
 
 ```bash
 docker compose run --rm \
-  finbot-data --end-date "$(date +%F)" --years 2 --calls-per-minute 5
+  finbot-data --end-date "$(date +%F)" --years 2
 ```
 
 Download the filtered ticker universe from the container:
@@ -467,23 +566,30 @@ docker compose run --rm finbot-tickers
 Download ticker details for the first missing 10 tickers from the container:
 
 ```bash
-docker compose run --rm finbot-ticker-details --limit 10 --calls-per-minute 5
+docker compose run --rm finbot-ticker-details --limit 10
 ```
 
 Refetch ticker details for 10 tickers from the container:
 
 ```bash
-docker compose run --rm finbot-ticker-details --refresh-all --limit 10 --calls-per-minute 5
+docker compose run --rm finbot-ticker-details --refresh-all --limit 10
 ```
 
 Download related tickers for the first 10 source tickers from the container:
 
 ```bash
-docker compose run --rm finbot-related-tickers --limit 10 --calls-per-minute 5
+docker compose run --rm finbot-related-tickers --limit 10
 ```
 
 Download latest ratios from the container:
 
 ```bash
 docker compose run --rm finbot-ratios
+```
+
+Download two years of financial statements from the container:
+
+```bash
+docker compose run --rm \
+  finbot-financials --end-date "$(date +%F)" --years 2
 ```

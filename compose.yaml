@@ -10,9 +10,12 @@ x-finbot-data-job: &finbot-data-job
       FINBOT_RAW_BARS_DIR: /data/market/daily_bars
       FINBOT_REFERENCE_DIR: /data/reference
       FINBOT_RATIOS_DIR: /data/ratios
+      FINBOT_FINANCIALS_DIR: /data/financials
       FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
-      MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-5}
+      FINBOT_FINANCIALS_HISTORY_YEARS: ${FINBOT_FINANCIALS_HISTORY_YEARS:-2}
+      MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-0}
       MASSIVE_RATIOS_CALLS_PER_MINUTE: ${MASSIVE_RATIOS_CALLS_PER_MINUTE:-0}
+      MASSIVE_FINANCIALS_CALLS_PER_MINUTE: ${MASSIVE_FINANCIALS_CALLS_PER_MINUTE:-0}
     volumes:
       - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
 
@@ -37,3 +40,7 @@ services:
   finbot-ratios:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ratios.py"]
+
+  finbot-financials:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_financials.py"]

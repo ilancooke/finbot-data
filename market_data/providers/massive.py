@@ -69,6 +69,134 @@ RATIO_COLUMNS = [
     "free_cash_flow",
 ]
 
+BALANCE_SHEET_COLUMNS = [
+    "ticker",
+    "cik",
+    "period_end",
+    "filing_date",
+    "fiscal_year",
+    "fiscal_quarter",
+    "timeframe",
+    "tickers",
+    "accounts_payable",
+    "accrued_and_other_current_liabilities",
+    "accumulated_other_comprehensive_income",
+    "additional_paid_in_capital",
+    "cash_and_equivalents",
+    "commitments_and_contingencies",
+    "common_stock",
+    "debt_current",
+    "deferred_revenue_current",
+    "goodwill",
+    "intangible_assets_net",
+    "inventories",
+    "long_term_debt_and_capital_lease_obligations",
+    "noncontrolling_interest",
+    "other_assets",
+    "other_current_assets",
+    "other_equity",
+    "other_noncurrent_liabilities",
+    "preferred_stock",
+    "property_plant_equipment_net",
+    "receivables",
+    "retained_earnings_deficit",
+    "short_term_investments",
+    "total_assets",
+    "total_current_assets",
+    "total_current_liabilities",
+    "total_equity",
+    "total_equity_attributable_to_parent",
+    "total_liabilities",
+    "total_liabilities_and_equity",
+    "treasury_stock",
+]
+
+CASH_FLOW_STATEMENT_COLUMNS = [
+    "ticker",
+    "cik",
+    "period_end",
+    "filing_date",
+    "fiscal_year",
+    "fiscal_quarter",
+    "timeframe",
+    "tickers",
+    "cash_from_operating_activities_continuing_operations",
+    "change_in_cash_and_equivalents",
+    "change_in_other_operating_assets_and_liabilities_net",
+    "depreciation_depletion_and_amortization",
+    "dividends",
+    "effect_of_currency_exchange_rate",
+    "income_loss_from_discontinued_operations",
+    "long_term_debt_issuances_repayments",
+    "net_cash_from_financing_activities",
+    "net_cash_from_financing_activities_continuing_operations",
+    "net_cash_from_financing_activities_discontinued_operations",
+    "net_cash_from_investing_activities",
+    "net_cash_from_investing_activities_continuing_operations",
+    "net_cash_from_investing_activities_discontinued_operations",
+    "net_cash_from_operating_activities",
+    "net_cash_from_operating_activities_discontinued_operations",
+    "net_income",
+    "noncontrolling_interests",
+    "other_cash_adjustments",
+    "other_financing_activities",
+    "other_investing_activities",
+    "other_operating_activities",
+    "purchase_of_property_plant_and_equipment",
+    "sale_of_property_plant_and_equipment",
+    "short_term_debt_issuances_repayments",
+]
+
+INCOME_STATEMENT_COLUMNS = [
+    "ticker",
+    "cik",
+    "period_end",
+    "filing_date",
+    "fiscal_year",
+    "fiscal_quarter",
+    "timeframe",
+    "tickers",
+    "basic_earnings_per_share",
+    "basic_shares_outstanding",
+    "consolidated_net_income_loss",
+    "cost_of_revenue",
+    "depreciation_depletion_amortization",
+    "diluted_earnings_per_share",
+    "diluted_shares_outstanding",
+    "discontinued_operations",
+    "ebitda",
+    "equity_in_affiliates",
+    "extraordinary_items",
+    "gross_profit",
+    "income_before_income_taxes",
+    "income_taxes",
+    "interest_expense",
+    "interest_income",
+    "net_income_loss_attributable_common_shareholders",
+    "noncontrolling_interest",
+    "operating_income",
+    "other_income_expense",
+    "other_operating_expenses",
+    "preferred_stock_dividends_declared",
+    "research_development",
+    "revenue",
+    "selling_general_administrative",
+    "total_operating_expenses",
+    "total_other_income_expense",
+]
+
+FINANCIAL_STATEMENT_COLUMNS = {
+    "balance_sheets": BALANCE_SHEET_COLUMNS,
+    "cash_flow_statements": CASH_FLOW_STATEMENT_COLUMNS,
+    "income_statements": INCOME_STATEMENT_COLUMNS,
+}
+
+FINANCIAL_STATEMENT_ENDPOINTS = {
+    "balance_sheets": "/stocks/financials/v1/balance-sheets",
+    "cash_flow_statements": "/stocks/financials/v1/cash-flow-statements",
+    "income_statements": "/stocks/financials/v1/income-statements",
+}
+
 
 def normalize_grouped_daily_response(payload: dict[str, Any], data_date: date) -> pd.DataFrame:
     """Normalize Massive grouped daily bars to the canonical daily bar schema."""
@@ -241,3 +369,93 @@ def download_ratios(
     ratios = normalize_ratios_rows(rows)
     logger.info("Fetched Massive financial ratios rows=%d", len(ratios))
     return ratios
+
+
+def _normalize_result_tickers(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return sorted({str(ticker).upper() for ticker in value if ticker})
+    if value:
+        return [str(value).upper()]
+    return []
+
+
+def normalize_financial_statement_rows(
+    rows: list[dict[str, Any]],
+    statement: str,
+    ticker_universe: set[str] | None = None,
+) -> pd.DataFrame:
+    """Normalize Massive financial statement rows to a durable, nullable schema."""
+
+    columns = FINANCIAL_STATEMENT_COLUMNS[statement]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    target_tickers = {ticker.upper() for ticker in ticker_universe} if ticker_universe is not None else None
+    expanded_rows = []
+    for row in rows:
+        provider_tickers = _normalize_result_tickers(row.get("tickers"))
+        matched_tickers = sorted(set(provider_tickers) & target_tickers) if target_tickers is not None else provider_tickers
+        if not matched_tickers and target_tickers is None:
+            matched_tickers = [None]
+
+        for ticker in matched_tickers:
+            expanded = {column: row.get(column) for column in columns}
+            expanded["ticker"] = ticker
+            expanded["tickers"] = provider_tickers
+            expanded_rows.append(expanded)
+
+    if not expanded_rows:
+        return pd.DataFrame(columns=columns)
+
+    frame = pd.DataFrame(expanded_rows)
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = None
+    frame["ticker"] = frame["ticker"].astype("string").str.upper()
+    frame["period_end"] = pd.to_datetime(frame["period_end"], errors="coerce").dt.date
+    frame["filing_date"] = pd.to_datetime(frame["filing_date"], errors="coerce").dt.date
+    return (
+        frame[columns]
+        .drop_duplicates(subset=["ticker", "cik", "period_end", "timeframe"], keep="last")
+        .sort_values(["ticker", "period_end", "timeframe"], na_position="last")
+        .reset_index(drop=True)
+    )
+
+
+def normalize_financial_statement_response(
+    payload: dict[str, Any],
+    statement: str,
+    ticker_universe: set[str] | None = None,
+) -> pd.DataFrame:
+    """Normalize a Massive financial statement response."""
+
+    return normalize_financial_statement_rows(payload.get("results") or [], statement, ticker_universe=ticker_universe)
+
+
+def download_financial_statement_rows(
+    statement: str,
+    api_key: str,
+    start_date: date,
+    end_date: date,
+    tickers: list[str],
+    base_url: str = MASSIVE_BASE_URL,
+    client: MassiveClient | None = None,
+    limit: int = 50_000,
+    calls_per_minute: float = 0,
+) -> list[dict[str, Any]]:
+    """Download raw Massive financial statement rows for a ticker batch."""
+
+    client = client or MassiveClient(api_key=api_key, base_url=base_url)
+    endpoint = FINANCIAL_STATEMENT_ENDPOINTS[statement]
+    params = {
+        "period_end.gte": start_date.isoformat(),
+        "period_end.lte": end_date.isoformat(),
+        "limit": limit,
+        "sort": "period_end.asc",
+    }
+    if tickers:
+        params["tickers.any_of"] = ",".join(sorted({ticker.upper() for ticker in tickers}))
+
+    rows = client.get_paginated(endpoint, params=params, calls_per_minute=calls_per_minute)
+    logger.info("Fetched Massive %s rows=%d", statement, len(rows))
+    return rows
