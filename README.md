@@ -24,7 +24,7 @@ Dependencies are intentionally limited to the active downloader and its tests:
 ## Project Layout
 
 - `scripts/`: command-line entrypoints.
-- `market_data/datasets/`: dataset-specific orchestration such as daily bars.
+- `market_data/datasets/`: dataset-specific orchestration such as daily bars and ratios.
 - `market_data/providers/`: provider API clients such as Massive.
 - `market_data/http.py`: shared Massive HTTP, pagination, retry, and sanitized error handling.
 - `market_data/universe.py`: ticker universe fetching, filtering, and parquet helpers for per-symbol jobs.
@@ -88,7 +88,7 @@ Point-in-time universe:
 python scripts/download_tickers.py --date 2026-05-01
 ```
 
-Ticker pagination is paced at 5 calls per minute by default. Use `--calls-per-minute 0` to disable pacing on a paid plan.
+Ticker pagination is paced at 5 calls per minute by default, which waits 12 seconds between paginated calls. Use `--calls-per-minute 0` to disable pacing on a paid plan.
 
 The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file includes only active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
 
@@ -134,6 +134,26 @@ python scripts/download_related_tickers.py --limit 10 --calls-per-minute 0
 
 The script writes `related_tickers.parquet` and `related_tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet stores source ticker to related ticker rows and preserves the result order returned by Massive; it does not derive peer groups, scores, or portfolio labels.
 
+## Ratios
+
+Download latest Massive financial ratios for the filtered ticker universe:
+
+```bash
+python scripts/download_ratios.py
+```
+
+The ratios endpoint returns latest rows rather than historical point-in-time rows. The script reads `data/reference/tickers.parquet`, fetches the latest ratios from Massive's Financials and Ratios endpoint, filters rows to the active common-stock universe, and writes a replace-style snapshot.
+
+Ratios pagination is unpaced by default because the Financials and Ratios addon guidance allows substantially higher throughput than the free stocks plan. Use `--calls-per-minute N` or `MASSIVE_RATIOS_CALLS_PER_MINUTE` if you want explicit pacing.
+
+Run with an explicit Massive result limit per request:
+
+```bash
+python scripts/download_ratios.py --limit 100
+```
+
+The script writes `ratios.parquet` and `ratios.metadata.json` in `data/ratios` by default, or `FINBOT_DATA_ROOT/ratios` when `FINBOT_DATA_ROOT` is set.
+
 ## Environment
 
 Massive credentials are read from environment variables or from a `.env` file in the current working directory:
@@ -146,12 +166,14 @@ MASSIVE_API_KEY=...
 
 Supported Finbot environment variables:
 
-- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars` and reference datasets default to `FINBOT_DATA_ROOT/reference`.
+- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, and ratios default to `FINBOT_DATA_ROOT/ratios`.
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_RATIOS_DIR`: ratios output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
 - `FINBOT_HISTORY_YEARS`: default history window for `--end-date` mode. Defaults to `2`.
 - `MASSIVE_CALLS_PER_MINUTE`: default request pacing. Defaults to `5`.
+- `MASSIVE_RATIOS_CALLS_PER_MINUTE`: default ratios pagination pacing. Defaults to `0`.
 
 Massive's free Stocks Basic plan is expected to provide 5 calls per minute, 2 years of historical data, and end-of-day data. Paid plans can use a longer `--years` value and `--calls-per-minute 0`.
 
@@ -306,6 +328,53 @@ Single-date mode also includes:
 - `related_tickers`
 - `parquet_file`
 
+`ratios.parquet` uses this Massive-native latest ratios schema:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `ticker` | string | Ticker symbol |
+| `cik` | string | Central Index Key when available |
+| `date` | date | Trading date used for the ratio calculations |
+| `price` | number | Stock price used in ratio calculations |
+| `average_volume` | number | Average trading volume over the last 30 trading days |
+| `market_cap` | number | Market capitalization |
+| `earnings_per_share` | number | Earnings per share |
+| `price_to_earnings` | number | Price-to-earnings ratio |
+| `price_to_book` | number | Price-to-book ratio |
+| `price_to_sales` | number | Price-to-sales ratio |
+| `price_to_cash_flow` | number | Price-to-cash-flow ratio |
+| `price_to_free_cash_flow` | number | Price-to-free-cash-flow ratio |
+| `dividend_yield` | number | Dividend yield |
+| `return_on_assets` | number | Return on assets ratio |
+| `return_on_equity` | number | Return on equity ratio |
+| `debt_to_equity` | number | Debt-to-equity ratio |
+| `current` | number | Current ratio |
+| `quick` | number | Quick ratio |
+| `cash` | number | Cash ratio |
+| `ev_to_sales` | number | Enterprise value to sales ratio |
+| `ev_to_ebitda` | number | Enterprise value to EBITDA ratio |
+| `enterprise_value` | number | Enterprise value |
+| `free_cash_flow` | number | Free cash flow |
+
+`ratios.metadata.json` always includes:
+
+- `collected_date_utc`
+- `collected_at_utc`
+- `provider`
+- `dataset`
+- `mode`
+- `input_file`
+- `input_tickers`
+- `raw_rows`
+- `output_rows`
+- `calls_per_minute`
+- `limit`
+- `rows`
+- `tickers`
+- `data_min_date`
+- `data_max_date`
+- `parquet_file`
+
 ## Local Tests
 
 ```bash
@@ -326,7 +395,7 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for Massive credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. The daily bars service writes to `/data/market/daily_bars`, and the reference-data services write to `/data/reference`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
+Compose reads `.env` for Massive credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. The daily bars service writes to `/data/market/daily_bars`, the reference-data services write to `/data/reference`, and the ratios service writes to `/data/ratios`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
 
 The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to the mounted data root are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
@@ -352,6 +421,12 @@ Show related tickers help:
 
 ```bash
 docker compose run --rm finbot-related-tickers --help
+```
+
+Show ratios help:
+
+```bash
+docker compose run --rm finbot-ratios --help
 ```
 
 No-network smoke test:
@@ -405,4 +480,10 @@ Download related tickers for the first 10 source tickers from the container:
 
 ```bash
 docker compose run --rm finbot-related-tickers --limit 10 --calls-per-minute 5
+```
+
+Download latest ratios from the container:
+
+```bash
+docker compose run --rm finbot-ratios
 ```

@@ -26,6 +26,7 @@ def _output_dirs() -> list[Path]:
         data_root,
         Path(os.getenv("FINBOT_RAW_BARS_DIR", str(data_root / "market/daily_bars"))),
         Path(os.getenv("FINBOT_REFERENCE_DIR", str(data_root / "reference"))),
+        Path(os.getenv("FINBOT_RATIOS_DIR", str(data_root / "ratios"))),
     ]
 
 

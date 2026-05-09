@@ -43,6 +43,32 @@ TICKER_DETAIL_COLUMNS = [
 
 RELATED_TICKER_COLUMNS = ["ticker", "related_ticker", "result_order"]
 
+RATIO_COLUMNS = [
+    "ticker",
+    "cik",
+    "date",
+    "price",
+    "average_volume",
+    "market_cap",
+    "earnings_per_share",
+    "price_to_earnings",
+    "price_to_book",
+    "price_to_sales",
+    "price_to_cash_flow",
+    "price_to_free_cash_flow",
+    "dividend_yield",
+    "return_on_assets",
+    "return_on_equity",
+    "debt_to_equity",
+    "current",
+    "quick",
+    "cash",
+    "ev_to_sales",
+    "ev_to_ebitda",
+    "enterprise_value",
+    "free_cash_flow",
+]
+
 
 def normalize_grouped_daily_response(payload: dict[str, Any], data_date: date) -> pd.DataFrame:
     """Normalize Massive grouped daily bars to the canonical daily bar schema."""
@@ -169,3 +195,49 @@ def download_related_tickers(
     related = normalize_related_tickers_response(payload, normalized_ticker)
     logger.info("Fetched Massive related tickers ticker=%s rows=%d", normalized_ticker, len(related))
     return related
+
+
+def normalize_ratios_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Normalize Massive financial ratios rows to the durable ratios schema."""
+
+    if not rows:
+        return pd.DataFrame(columns=RATIO_COLUMNS)
+
+    frame = pd.json_normalize(rows)
+    for column in RATIO_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = None
+    frame["ticker"] = frame["ticker"].astype(str).str.upper()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
+    return (
+        frame[RATIO_COLUMNS]
+        .drop_duplicates(subset=["ticker", "date"], keep="last")
+        .sort_values(["ticker", "date"])
+        .reset_index(drop=True)
+    )
+
+
+def normalize_ratios_response(payload: dict[str, Any]) -> pd.DataFrame:
+    """Normalize a Massive financial ratios response."""
+
+    return normalize_ratios_rows(payload.get("results") or [])
+
+
+def download_ratios(
+    api_key: str,
+    base_url: str = MASSIVE_BASE_URL,
+    client: MassiveClient | None = None,
+    limit: int = 50_000,
+    calls_per_minute: float = 0,
+) -> pd.DataFrame:
+    """Download latest Massive financial ratios rows."""
+
+    client = client or MassiveClient(api_key=api_key, base_url=base_url)
+    rows = client.get_paginated(
+        "/stocks/financials/v1/ratios",
+        params={"limit": limit, "sort": "ticker.asc"},
+        calls_per_minute=calls_per_minute,
+    )
+    ratios = normalize_ratios_rows(rows)
+    logger.info("Fetched Massive financial ratios rows=%d", len(ratios))
+    return ratios

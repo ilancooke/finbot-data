@@ -7,6 +7,7 @@ import pandas as pd
 
 from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.datasets.ratios import download_ratios_snapshot, read_ratios
 from market_data.datasets.related_tickers import download_related_tickers_snapshot, read_related_tickers
 from market_data.datasets.ticker_details import (
     download_ticker_details_snapshot,
@@ -16,9 +17,11 @@ from market_data.datasets.ticker_details import (
 from market_data.http import MassiveClient, MassiveHttpError
 from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
 from market_data.providers.massive import (
+    RATIO_COLUMNS,
     RELATED_TICKER_COLUMNS,
     TICKER_DETAIL_COLUMNS,
     normalize_grouped_daily_response,
+    normalize_ratios_response,
     normalize_related_tickers_response,
     normalize_ticker_details_response,
 )
@@ -31,6 +34,7 @@ from market_data.universe import (
     write_ticker_universe,
 )
 from scripts.download_daily_bars import main
+from scripts.download_ratios import main as ratios_main
 from scripts.download_related_tickers import main as related_tickers_main
 from scripts.download_ticker_details import main as ticker_details_main
 from scripts.download_tickers import main as tickers_main
@@ -443,6 +447,138 @@ def test_normalize_massive_related_tickers_response_uses_source_and_related_sche
     assert normalized["ticker"].tolist() == ["AAPL", "AAPL"]
     assert normalized["related_ticker"].tolist() == ["MSFT", "GOOGL"]
     assert normalized["result_order"].tolist() == [1, 2]
+
+
+def test_normalize_massive_ratios_response_uses_latest_ratios_schema():
+    payload = {
+        "status": "OK",
+        "results": [
+            {
+                "ticker": "aapl",
+                "cik": "320193",
+                "date": "2024-09-19",
+                "price": 228.87,
+                "average_volume": 47500000,
+                "market_cap": 3479770835190,
+                "earnings_per_share": 6.57,
+                "price_to_earnings": 34.84,
+                "price_to_book": 52.16,
+                "price_to_sales": 9.02,
+                "price_to_cash_flow": 30.78,
+                "price_to_free_cash_flow": 33.35,
+                "dividend_yield": 0.0044,
+                "return_on_assets": 0.3075,
+                "return_on_equity": 1.5284,
+                "debt_to_equity": 1.52,
+                "current": 0.68,
+                "quick": 0.63,
+                "cash": 0.19,
+                "ev_to_sales": 9.22,
+                "ev_to_ebitda": 26.98,
+                "enterprise_value": 3555509835190,
+                "free_cash_flow": 104339000000,
+            }
+        ],
+    }
+
+    normalized = normalize_ratios_response(payload)
+
+    assert list(normalized.columns) == RATIO_COLUMNS
+    assert normalized.loc[0, "ticker"] == "AAPL"
+    assert normalized.loc[0, "date"] == date(2024, 9, 19)
+    assert normalized.loc[0, "price_to_earnings"] == 34.84
+
+
+def test_download_ratios_snapshot_filters_to_ticker_universe(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    ratios_dir = tmp_path / "ratios"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    calls = []
+
+    def fake_downloader(api_key, limit, calls_per_minute):
+        calls.append((api_key, limit, calls_per_minute))
+        return pd.DataFrame(
+            [
+                {"ticker": "AAPL", "date": date(2024, 9, 19), "price_to_earnings": 34.84},
+                {"ticker": "MSFT", "date": date(2024, 9, 19), "price_to_earnings": 35.25},
+                {"ticker": "SPY", "date": date(2024, 9, 19), "price_to_earnings": 25.0},
+            ]
+        )
+
+    output_path = download_ratios_snapshot(
+        input_dir=reference_dir,
+        output_dir=ratios_dir,
+        calls_per_minute=0,
+        limit=100,
+        downloader=fake_downloader,
+    )
+    ratios = read_ratios(ratios_dir)
+    metadata = json.loads((ratios_dir / "ratios.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == ratios_dir / "ratios.parquet"
+    assert calls == [("test-key", 100, 0)]
+    assert ratios["ticker"].tolist() == ["AAPL", "MSFT"]
+    assert metadata["provider"] == "massive"
+    assert metadata["dataset"] == "ratios"
+    assert metadata["mode"] == "replace"
+    assert metadata["input_tickers"] == 2
+    assert metadata["raw_rows"] == 3
+    assert metadata["output_rows"] == 2
+    assert metadata["data_min_date"] == "2024-09-19"
+    assert metadata["data_max_date"] == "2024-09-19"
+
+
+def test_download_ratios_cli_writes_ratios(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    ratios_dir = tmp_path / "ratios"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+
+    def fake_download_ratios(api_key, limit=50000, calls_per_minute=0):
+        assert api_key == "test-key"
+        assert limit == 100
+        assert calls_per_minute == 0
+        return pd.DataFrame(
+            [
+                {"ticker": "AAPL", "date": date(2024, 9, 19), "price_to_earnings": 34.84},
+            ]
+        )
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    monkeypatch.setattr("market_data.datasets.ratios.download_ratios", fake_download_ratios)
+
+    exit_code = ratios_main(
+        [
+            "--input-dir",
+            str(reference_dir),
+            "--output-dir",
+            str(ratios_dir),
+            "--calls-per-minute",
+            "0",
+            "--limit",
+            "100",
+        ]
+    )
+    ratios = pd.read_parquet(ratios_dir / "ratios.parquet")
+    metadata = json.loads((ratios_dir / "ratios.metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert ratios["ticker"].tolist() == ["AAPL"]
+    assert ratios["price_to_earnings"].tolist() == [34.84]
+    assert metadata["dataset"] == "ratios"
+    assert metadata["raw_rows"] == 1
+    assert metadata["output_rows"] == 1
 
 
 def test_download_related_tickers_snapshot_writes_replace_snapshot(tmp_path, monkeypatch):
