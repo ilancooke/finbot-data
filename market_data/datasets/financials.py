@@ -152,6 +152,8 @@ def write_financial_statement_snapshot(
         "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
         "rows": int(len(normalized)),
         "tickers": int(normalized["ticker"].nunique()) if "ticker" in normalized.columns else 0,
+        "data_min_date": period_min,
+        "data_max_date": period_max,
         "data_min_period_end": period_min,
         "data_max_period_end": period_max,
         "parquet_file": output_path.name,

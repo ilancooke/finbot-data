@@ -619,6 +619,8 @@ def test_download_financials_history_writes_statement_files_for_ticker_universe(
     assert metadata["requested_tickers"] == 2
     assert metadata["raw_rows"] == 2
     assert metadata["output_rows"] == 1
+    assert metadata["data_min_date"] == "2025-06-28"
+    assert metadata["data_max_date"] == "2025-06-28"
     assert metadata["data_min_period_end"] == "2025-06-28"
     assert metadata["data_max_period_end"] == "2025-06-28"
 

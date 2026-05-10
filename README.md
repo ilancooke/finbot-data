@@ -464,6 +464,8 @@ Financial statement metadata files always include:
 - `ticker_batch_size`
 - `rows`
 - `tickers`
+- `data_min_date`
+- `data_max_date`
 - `data_min_period_end`
 - `data_max_period_end`
 - `parquet_file`
