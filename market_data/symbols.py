@@ -7,6 +7,8 @@ from pathlib import Path
 
 import requests
 
+from market_data.universe import read_known_universe_symbols
+
 logger = logging.getLogger(__name__)
 
 SP500_CSV_URL = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
@@ -21,13 +23,9 @@ def load_sp500_symbols(
     if symbols_file:
         path = Path(symbols_file)
         if path.exists():
-            symbols = [
-                line.strip().upper()
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            symbols = read_known_universe_symbols(path)
             logger.info("Loaded %d symbols from %s", len(symbols), path)
-            return sorted(set(symbols))
+            return symbols
 
     response = requests.get(symbols_url, timeout=30)
     response.raise_for_status()
@@ -45,4 +43,3 @@ def load_sp500_symbols(
 
     logger.info("Loaded %d S&P 500 symbols", len(symbols))
     return symbols
-

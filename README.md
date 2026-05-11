@@ -42,7 +42,7 @@ python scripts/download_daily_bars.py --end-date 2026-05-01 --years 2
 
 By default, local script runs write under this repository's `data/` directory. For a shared multipackage data root, set `FINBOT_DATA_ROOT`; daily bars then write to `FINBOT_DATA_ROOT/market/daily_bars` unless `FINBOT_RAW_BARS_DIR` is set.
 
-The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, then replaces the existing snapshot. By default, request pacing is disabled. Use `--calls-per-minute N` if you need explicit pacing for a lower-throughput plan. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
+The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, filters to the current `tickers.parquet` universe, then replaces the existing snapshot. By default, request pacing is disabled. Use `--calls-per-minute N` if you need explicit pacing for a lower-throughput plan. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
 
 The script requests weekdays in the date window. It does not use a NYSE holiday calendar; holidays and other dates with no returned data are recorded in `empty_market_dates`.
 
@@ -54,6 +54,8 @@ Arguments:
 - `--calls-per-minute N`: request pacing for Massive. Defaults to `0`, which disables built-in pacing.
 - `--date YYYY-MM-DD`: optional single-day smoke/debug mode instead of `--end-date`.
 - `--output-dir PATH`: optional output directory. Defaults to `data/daily_bars`, or `FINBOT_DATA_ROOT/market/daily_bars` when `FINBOT_DATA_ROOT` is set.
+- `--all-symbols`: keep all symbols returned by Massive grouped bars instead of filtering to `tickers.parquet`.
+- `--ticker-universe-dir PATH`: optional directory containing `tickers.parquet`. Defaults to `FINBOT_REFERENCE_DIR`, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set.
 
 Example with an explicit output directory:
 
@@ -67,6 +69,13 @@ Short test run:
 python scripts/download_daily_bars.py --end-date 2026-05-01 --days 10 --output-dir /tmp/finbot-data-test
 ```
 
+Shared-data run filtered to the current ticker universe:
+
+```bash
+FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
+python scripts/download_daily_bars.py --end-date 2026-05-10 --years 2
+```
+
 The script writes:
 
 - `historical.parquet`
@@ -76,7 +85,8 @@ If `historical.parquet` already exists in replace mode, it is atomically replace
 
 ## Ticker Universe
 
-Download the current active US common-stock universe:
+Download the current S&P 500 known universe, validated against Massive's active US
+common-stock universe:
 
 ```bash
 python scripts/download_tickers.py
@@ -90,15 +100,21 @@ python scripts/download_tickers.py --date 2026-05-01
 
 Ticker pagination is unpaced by default. Use `--calls-per-minute N` if you need explicit pacing.
 
-The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file first filters to active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded.
+The script writes the filtered universe to `tickers.parquet` and `tickers.metadata.json` in `data/reference` by default, or `FINBOT_DATA_ROOT/reference` when `FINBOT_DATA_ROOT` is set. The parquet file first filters to active US common stocks whose primary exchange is one of `XNYS`, `XNAS`, `ARCX`, `XASE`, or `BATS`; ETFs, warrants, preferreds, inactive tickers, and OTC-like rows are excluded. It then applies the selected known-universe strategy.
 
-During project development, the ticker universe is temporarily limited to:
+The default known-universe strategy is `sp500`. Until Finbot has a programmatic index-constituent downloader, the script reads a CSV seed file with a `Symbol` or `Ticker` column. By default it looks for `sp500constituents.csv` in `FINBOT_DATA_ROOT`, then `./data`, then the workspace-level `data` directory.
 
-```text
-GOOGL, AMD, META, MSFT, GOOG, AMZN, TSLA, AAPL, AVGO, INTC, NVDA, NFLX, SNAP, ORCL
+Use an explicit CSV path:
+
+```bash
+python scripts/download_tickers.py --known-universe-file /path/to/sp500constituents.csv
 ```
 
-To replace or remove that development filter, update `DEVELOPMENT_TICKER_UNIVERSE` in `market_data/universe.py` and rerun `python scripts/download_tickers.py`.
+Use all active US common stocks without an index-constituent filter:
+
+```bash
+python scripts/download_tickers.py --universe all_common_stocks
+```
 
 ## Ticker Details
 
@@ -219,6 +235,8 @@ Supported Finbot environment variables:
 - `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, ratios default to `FINBOT_DATA_ROOT/ratios`, and financial statements default to `FINBOT_DATA_ROOT/financials`.
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_TICKER_UNIVERSE`: default ticker universe strategy. Defaults to `sp500`; set to `all_common_stocks` to disable the known-universe CSV filter.
+- `FINBOT_KNOWN_UNIVERSE_FILE`: CSV file containing a `Symbol` or `Ticker` column for the selected known universe.
 - `FINBOT_RATIOS_DIR`: ratios output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_FINANCIALS_DIR`: financial statements output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
@@ -265,6 +283,7 @@ Replace mode also includes:
 - `market_dates_requested`
 - `calls_per_minute`
 - `empty_market_dates`
+- `ticker_universe_filter` unless `--all-symbols` is used
 
 Single-date mode also includes:
 
@@ -294,6 +313,10 @@ Single-date mode also includes:
 - `provider`
 - `dataset`
 - `mode`
+- `universe_strategy`
+- `universe_name`
+- `known_universe_file`
+- `known_universe_symbols`
 - `universe_date`
 - `rows`
 - `tickers`
@@ -535,7 +558,7 @@ No-network smoke test:
 ```bash
 docker compose run --rm \
   -e FINBOT_INGEST_DISABLE_NETWORK=1 \
-  finbot-data --end-date 2026-05-01 --days 10 --calls-per-minute 0
+  finbot-data --end-date 2026-05-01 --days 10 --calls-per-minute 0 --all-symbols
 ```
 
 Short Massive API test:

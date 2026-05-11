@@ -27,22 +27,7 @@ TICKER_COLUMNS = [
 ]
 
 LISTED_PRIMARY_EXCHANGES = {"XNYS", "XNAS", "ARCX", "XASE", "BATS"}
-DEVELOPMENT_TICKER_UNIVERSE = [
-    "GOOGL",
-    "AMD",
-    "META",
-    "MSFT",
-    "GOOG",
-    "AMZN",
-    "TSLA",
-    "AAPL",
-    "AVGO",
-    "INTC",
-    "NVDA",
-    "NFLX",
-    "SNAP",
-    "ORCL",
-]
+KNOWN_UNIVERSE_SYMBOL_COLUMNS = ("symbol", "ticker")
 
 
 def normalize_tickers(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -107,11 +92,35 @@ def filter_common_stocks(tickers: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def filter_development_ticker_universe(
+def read_known_universe_symbols(csv_path: str | Path) -> list[str]:
+    """Read a known ticker universe CSV and return normalized symbols."""
+
+    csv_path = Path(csv_path)
+    frame = pd.read_csv(csv_path, dtype=str)
+    normalized_columns = {column.strip().lower(): column for column in frame.columns}
+    symbol_column = next(
+        (normalized_columns[column] for column in KNOWN_UNIVERSE_SYMBOL_COLUMNS if column in normalized_columns),
+        None,
+    )
+    if symbol_column is None:
+        supported = ", ".join(KNOWN_UNIVERSE_SYMBOL_COLUMNS)
+        raise ValueError(f"Known universe CSV {csv_path} must include one of these columns: {supported}")
+
+    symbols = (
+        frame[symbol_column]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+    return sorted(symbol for symbol in symbols.unique().tolist() if symbol)
+
+
+def filter_symbol_ticker_universe(
     tickers: pd.DataFrame,
-    allowed_tickers: list[str] | tuple[str, ...] = DEVELOPMENT_TICKER_UNIVERSE,
+    allowed_tickers: list[str] | tuple[str, ...],
 ) -> pd.DataFrame:
-    """Temporarily limit the ticker universe while Finbot is in development."""
+    """Limit the ticker universe to a configured set of symbols."""
 
     if tickers.empty:
         return pd.DataFrame(columns=tickers.columns)

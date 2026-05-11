@@ -82,6 +82,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help=f"Output directory for historical.parquet and metadata. Default: {DEFAULT_OUTPUT_DIR}",
     )
+    parser.add_argument(
+        "--all-symbols",
+        action="store_true",
+        help="Keep all symbols returned by Massive grouped bars instead of filtering to reference/tickers.parquet.",
+    )
+    parser.add_argument(
+        "--ticker-universe-dir",
+        default=None,
+        help="Directory containing tickers.parquet. Defaults to FINBOT_REFERENCE_DIR or FINBOT_DATA_ROOT/reference.",
+    )
     args = parser.parse_args(argv)
     if args.date and (args.days is not None or args.years is not None):
         parser.error("--days and --years can only be used with --end-date")
@@ -105,7 +115,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = time.perf_counter()
     try:
         if args.date:
-            download_single_date(args.date, output_dir=args.output_dir)
+            download_single_date(
+                args.date,
+                output_dir=args.output_dir,
+                filter_to_ticker_universe=not args.all_symbols,
+                ticker_universe_dir=args.ticker_universe_dir,
+            )
         else:
             download_history(
                 end_date=args.end_date,
@@ -113,6 +128,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 days=args.days,
                 output_dir=args.output_dir,
                 calls_per_minute=args.calls_per_minute,
+                filter_to_ticker_universe=not args.all_symbols,
+                ticker_universe_dir=args.ticker_universe_dir,
             )
         logger.info(
             "Massive daily download succeeded target_date=%s total_time=%.3fs",

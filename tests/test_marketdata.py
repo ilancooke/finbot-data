@@ -32,11 +32,11 @@ from market_data.providers.massive import (
 )
 from market_data.storage import write_daily_snapshot
 from market_data.universe import (
-    DEVELOPMENT_TICKER_UNIVERSE,
     fetch_ticker_universe,
-    filter_development_ticker_universe,
+    filter_symbol_ticker_universe,
     filter_common_stocks,
     normalize_tickers,
+    read_known_universe_symbols,
     read_ticker_universe,
     write_ticker_universe,
 )
@@ -192,7 +192,22 @@ def test_filter_common_stocks_keeps_active_listed_us_common_stocks():
     assert filtered["ticker"].tolist() == ["AAPL"]
 
 
-def test_filter_development_ticker_universe_keeps_only_configured_development_symbols():
+def test_read_known_universe_symbols_accepts_sp_constituent_csv(tmp_path):
+    csv_path = tmp_path / "sp500constituents.csv"
+    csv_path.write_text(
+        "Symbol,Security,GICS Sector\n"
+        "aapl,Apple Inc.,Information Technology\n"
+        "BRK.B,Berkshire Hathaway,Financials\n"
+        "AAPL,Apple Inc.,Information Technology\n",
+        encoding="utf-8",
+    )
+
+    symbols = read_known_universe_symbols(csv_path)
+
+    assert symbols == ["AAPL", "BRK.B"]
+
+
+def test_filter_symbol_ticker_universe_keeps_only_configured_symbols():
     tickers = normalize_tickers(
         [
             {"ticker": "aapl", "market": "stocks"},
@@ -201,10 +216,9 @@ def test_filter_development_ticker_universe_keeps_only_configured_development_sy
         ]
     )
 
-    filtered = filter_development_ticker_universe(tickers)
+    filtered = filter_symbol_ticker_universe(tickers, ["AAPL", "MSFT"])
 
     assert filtered["ticker"].tolist() == ["AAPL", "MSFT"]
-    assert "IBM" not in DEVELOPMENT_TICKER_UNIVERSE
 
 
 def test_write_and_read_ticker_universe(tmp_path):
@@ -227,6 +241,9 @@ def test_write_and_read_ticker_universe(tmp_path):
 
 
 def test_download_tickers_cli_writes_universe(tmp_path, monkeypatch):
+    known_universe_file = tmp_path / "sp500constituents.csv"
+    known_universe_file.write_text("Symbol,Security\nAAPL,Apple Inc.\nMSFT,Microsoft Corp.\n", encoding="utf-8")
+
     class FakeClient:
         def __init__(self, api_key):
             self.api_key = api_key
@@ -263,7 +280,18 @@ def test_download_tickers_cli_writes_universe(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.download_tickers.MassiveClient", FakeClient)
     monkeypatch.setattr("scripts.download_tickers.fetch_ticker_universe", fake_fetch)
 
-    exit_code = tickers_main(["--date", "2026-05-01", "--calls-per-minute", "5", "--output-dir", str(tmp_path)])
+    exit_code = tickers_main(
+        [
+            "--date",
+            "2026-05-01",
+            "--calls-per-minute",
+            "5",
+            "--output-dir",
+            str(tmp_path),
+            "--known-universe-file",
+            str(known_universe_file),
+        ]
+    )
     tickers = pd.read_parquet(tmp_path / "tickers.parquet")
     metadata = json.loads((tmp_path / "tickers.metadata.json").read_text(encoding="utf-8"))
 
@@ -272,14 +300,18 @@ def test_download_tickers_cli_writes_universe(tmp_path, monkeypatch):
     assert metadata["provider"] == "massive"
     assert metadata["dataset"] == "ticker_universe"
     assert metadata["mode"] == "replace"
+    assert metadata["universe_strategy"] == "sp500"
+    assert metadata["universe_name"] == "S&P 500"
+    assert metadata["known_universe_file"] == str(known_universe_file)
+    assert metadata["known_universe_symbols"] == 2
     assert metadata["universe_date"] == "2026-05-01"
     assert metadata["input_rows"] == 2
     assert metadata["common_stock_rows"] == 1
     assert metadata["output_rows"] == 1
     assert metadata["rows"] == 1
     assert metadata["filter"]["type"] == "CS"
-    assert metadata["filter"]["development_tickers"] == DEVELOPMENT_TICKER_UNIVERSE
-    assert "AAPL" not in metadata["filter"]["missing_development_tickers"]
+    assert metadata["filter"]["known_universe"] == "sp500"
+    assert metadata["filter"]["missing_known_tickers"] == ["MSFT"]
 
 
 def test_normalize_massive_grouped_daily_response_uses_canonical_schema():
@@ -929,7 +961,7 @@ def test_download_script_writes_empty_snapshot_when_network_disabled(tmp_path, m
     monkeypatch.setenv("FINBOT_INGEST_DISABLE_NETWORK", "1")
     monkeypatch.delenv("FINBOT_RAW_BARS_DIR", raising=False)
 
-    exit_code = main(["--date", "2026-05-02", "--output-dir", str(output_dir)])
+    exit_code = main(["--date", "2026-05-02", "--output-dir", str(output_dir), "--all-symbols"])
     metadata = json.loads((output_dir / "historical.metadata.json").read_text(encoding="utf-8"))
     bars = pd.read_parquet(output_dir / "historical.parquet")
 
@@ -970,6 +1002,7 @@ def test_download_script_supports_days_window_when_network_disabled(tmp_path, mo
             "0",
             "--output-dir",
             str(output_dir),
+            "--all-symbols",
         ]
     )
     metadata = json.loads((output_dir / "historical.metadata.json").read_text(encoding="utf-8"))
@@ -1055,3 +1088,68 @@ def test_download_history_replaces_existing_snapshot_and_records_empty_dates(tmp
     assert metadata["requested_end_date"] == "2026-05-05"
     assert metadata["history_days"] == 5
     assert metadata["empty_market_dates"] == ["2026-05-04"]
+
+
+def test_download_history_can_filter_to_ticker_universe(tmp_path, monkeypatch):
+    output_dir = tmp_path / "bars"
+    reference_dir = tmp_path / "reference"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+            {"ticker": "msft", "name": "Microsoft", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+
+    def fake_downloader(data_date, api_key):
+        return pd.DataFrame(
+            {
+                "date": [data_date, data_date, data_date],
+                "symbol": ["AAPL", "MSFT", "ZZZ"],
+                "open": [100.0, 200.0, 300.0],
+                "high": [105.0, 205.0, 305.0],
+                "low": [99.0, 199.0, 299.0],
+                "close": [104.0, 204.0, 304.0],
+                "volume": [1000, 2000, 3000],
+            }
+        )
+
+    output_path = download_history(
+        end_date=date(2026, 5, 1),
+        years=None,
+        days=1,
+        output_dir=output_dir,
+        calls_per_minute=0,
+        downloader=fake_downloader,
+        filter_to_ticker_universe=True,
+        ticker_universe_dir=reference_dir,
+    )
+    bars = pd.read_parquet(output_path)
+    metadata = json.loads((output_dir / "historical.metadata.json").read_text(encoding="utf-8"))
+
+    assert bars["symbol"].tolist() == ["AAPL", "MSFT"]
+    assert metadata["symbols"] == 2
+    assert metadata["ticker_universe_filter"]["enabled"] is True
+    assert metadata["ticker_universe_filter"]["input_tickers"] == 2
+    assert metadata["ticker_universe_filter"]["input_file"] == str(reference_dir / "tickers.parquet")
+
+
+def test_download_script_filters_to_ticker_universe_by_default(tmp_path, monkeypatch):
+    output_dir = tmp_path / "bars"
+    reference_dir = tmp_path / "reference"
+    tickers = normalize_tickers(
+        [
+            {"ticker": "aapl", "name": "Apple", "market": "stocks", "active": True},
+        ]
+    )
+    write_ticker_universe(tickers, reference_dir, metadata={"provider": "massive"})
+    monkeypatch.setenv("FINBOT_INGEST_DISABLE_NETWORK", "1")
+    monkeypatch.setenv("FINBOT_REFERENCE_DIR", str(reference_dir))
+
+    exit_code = main(["--date", "2026-05-01", "--output-dir", str(output_dir)])
+    metadata = json.loads((output_dir / "historical.metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert metadata["ticker_universe_filter"]["enabled"] is True
+    assert metadata["ticker_universe_filter"]["input_tickers"] == 1

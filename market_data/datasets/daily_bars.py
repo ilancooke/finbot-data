@@ -13,6 +13,7 @@ from market_data.config import get_env, resolve_finbot_data_path
 from market_data.normalize import BAR_COLUMNS
 from market_data.providers.massive import download_grouped_daily_bars
 from market_data.storage import write_daily_snapshot, write_historical_snapshot
+from market_data.universe import read_ticker_universe
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,15 @@ def resolve_output_dir(output_dir: str | Path | None) -> Path:
         env_key="FINBOT_RAW_BARS_DIR",
         default_path=DEFAULT_OUTPUT_DIR,
         data_root_subpath=Path("market/daily_bars"),
+    )
+
+
+def resolve_ticker_universe_dir(ticker_universe_dir: str | Path | None) -> Path:
+    return resolve_finbot_data_path(
+        ticker_universe_dir,
+        env_key="FINBOT_REFERENCE_DIR",
+        default_path=Path("data/reference"),
+        data_root_subpath="reference",
     )
 
 
@@ -78,28 +88,63 @@ def base_metadata(mode: str) -> dict[str, object]:
     }
 
 
-def download_single_date(data_date: date, output_dir: str | Path | None = None) -> Path:
+def ticker_universe_symbols(ticker_universe_dir: str | Path | None = None) -> list[str]:
+    tickers = read_ticker_universe(resolve_ticker_universe_dir(ticker_universe_dir))
+    if "ticker" not in tickers.columns:
+        raise ValueError("Ticker universe must include a ticker column")
+    return sorted(tickers["ticker"].dropna().astype(str).str.upper().unique().tolist())
+
+
+def filter_bars_to_symbols(bars: pd.DataFrame, symbols: list[str] | tuple[str, ...]) -> pd.DataFrame:
+    if bars.empty or "symbol" not in bars.columns:
+        return bars.copy()
+    allowed = {symbol.upper() for symbol in symbols}
+    return bars[bars["symbol"].astype(str).str.upper().isin(allowed)].copy().reset_index(drop=True)
+
+
+def universe_filter_metadata(symbols: list[str], ticker_universe_dir: str | Path | None) -> dict[str, object]:
+    return {
+        "ticker_universe_filter": {
+            "enabled": True,
+            "input_file": str(resolve_ticker_universe_dir(ticker_universe_dir) / "tickers.parquet"),
+            "input_tickers": len(symbols),
+        },
+    }
+
+
+def download_single_date(
+    data_date: date,
+    output_dir: str | Path | None = None,
+    filter_to_ticker_universe: bool = False,
+    ticker_universe_dir: str | Path | None = None,
+) -> Path:
     """Download adjusted daily bars for one market date and write a fresh snapshot."""
 
     resolved_output_dir = resolve_output_dir(output_dir)
+    symbols = ticker_universe_symbols(ticker_universe_dir) if filter_to_ticker_universe else []
+    metadata_extra = base_metadata("single-date")
+    if filter_to_ticker_universe:
+        metadata_extra.update(universe_filter_metadata(symbols, ticker_universe_dir))
     if network_disabled():
         logger.warning("Network ingest disabled via FINBOT_INGEST_DISABLE_NETWORK; writing empty snapshot")
         output_path = write_daily_snapshot(
             data_date,
             pd.DataFrame(columns=BAR_COLUMNS),
             resolved_output_dir,
-            metadata_extra=base_metadata("single-date"),
+            metadata_extra=metadata_extra,
         )
         logger.info("Daily ingest completed with network disabled. Output=%s", output_path)
         return output_path
 
     bars = download_grouped_daily_bars(data_date=data_date, api_key=get_massive_api_key())
+    if symbols:
+        bars = filter_bars_to_symbols(bars, symbols)
 
     output_path = write_daily_snapshot(
         data_date,
         bars,
         resolved_output_dir,
-        metadata_extra=base_metadata("single-date"),
+        metadata_extra=metadata_extra,
     )
     logger.info(
         "Downloaded Massive grouped daily bars for date=%s symbols=%d rows=%d output=%s",
@@ -118,6 +163,8 @@ def download_history(
     output_dir: str | Path | None = None,
     calls_per_minute: float = DEFAULT_CALLS_PER_MINUTE,
     downloader: Callable[[date, str], pd.DataFrame] | None = None,
+    filter_to_ticker_universe: bool = False,
+    ticker_universe_dir: str | Path | None = None,
 ) -> Path:
     """Download a rolling adjusted daily history window and replace the snapshot."""
 
@@ -131,6 +178,7 @@ def download_history(
     else:
         raise ValueError("Either years or days is required")
     market_dates = business_dates(start_date, end_date)
+    symbols = ticker_universe_symbols(ticker_universe_dir) if filter_to_ticker_universe else []
     metadata = {
         **base_metadata("replace"),
         "requested_start_date": start_date.isoformat(),
@@ -140,6 +188,8 @@ def download_history(
         "calls_per_minute": calls_per_minute,
         "empty_market_dates": [],
     }
+    if filter_to_ticker_universe:
+        metadata.update(universe_filter_metadata(symbols, ticker_universe_dir))
 
     if network_disabled():
         logger.warning("Network ingest disabled via FINBOT_INGEST_DISABLE_NETWORK; writing empty history snapshot")
@@ -156,6 +206,8 @@ def download_history(
 
     for idx, data_date in enumerate(market_dates, start=1):
         bars = fetch(data_date, api_key)
+        if symbols:
+            bars = filter_bars_to_symbols(bars, symbols)
         if bars.empty:
             empty_dates.append(data_date.isoformat())
             logger.info("No Massive grouped daily bars for date=%s (%d/%d)", data_date.isoformat(), idx, len(market_dates))
