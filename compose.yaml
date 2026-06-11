@@ -2,7 +2,8 @@ x-finbot-data-job: &finbot-data-job
     build: .
     image: finbot-data:local
     environment:
-      MASSIVE_API_KEY: ${MASSIVE_API_KEY:?Set MASSIVE_API_KEY in .env}
+      NASDAQ_DATA_LINK_API_KEY: ${NASDAQ_DATA_LINK_API_KEY:-}
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       HOST_UID: ${HOST_UID:-1000}
       HOST_GID: ${HOST_GID:-1000}
@@ -11,6 +12,7 @@ x-finbot-data-job: &finbot-data-job
       FINBOT_REFERENCE_DIR: /data/reference
       FINBOT_RATIOS_DIR: /data/ratios
       FINBOT_FINANCIALS_DIR: /data/financials
+      FINBOT_RAW_EXPORT_DIR: /data/raw/exports/daily_bars
       FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
       FINBOT_FINANCIALS_HISTORY_YEARS: ${FINBOT_FINANCIALS_HISTORY_YEARS:-2}
       MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-0}
@@ -24,6 +26,18 @@ services:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_daily_bars.py"]
     command: ["--help"]
+
+  finbot-ticker-universe:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ticker_universe.py"]
+
+  finbot-historical-prices-subset:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices_subset.py"]
+
+  finbot-update-historical-prices:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_historical_prices_subset.py"]
 
   finbot-tickers:
     <<: *finbot-data-job

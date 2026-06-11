@@ -2,14 +2,28 @@ from __future__ import annotations
 
 from datetime import date
 import json
+from pathlib import Path
 
 import pandas as pd
 
 from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
+from market_data.datasets.daily_prices import (
+    CANONICAL_PRICE_COLUMNS,
+    HISTORICAL_SUBSET_PARQUET_FILE,
+    build_historical_subset_from_files,
+    normalize_price_frame,
+    request_bulk_price_files,
+    update_historical_subset,
+)
 from market_data.datasets.financials import download_financials_history, read_financial_statement
 from market_data.datasets.ratios import download_ratios_snapshot, read_ratios
 from market_data.datasets.related_tickers import download_related_tickers_snapshot, read_related_tickers
+from market_data.datasets.ticker_universe import (
+    download_and_write_ticker_universe,
+    filter_tickers,
+    normalize_tickers_frame,
+)
 from market_data.datasets.ticker_details import (
     download_ticker_details_snapshot,
     read_ticker_details,
@@ -17,6 +31,7 @@ from market_data.datasets.ticker_details import (
 )
 from market_data.http import MassiveClient, MassiveHttpError
 from market_data.normalize import BAR_COLUMNS, normalize_bars_frame
+from market_data.providers.nasdaq_data_link import NasdaqDataLinkClient, NasdaqDataLinkError
 from market_data.providers.massive import (
     BALANCE_SHEET_COLUMNS,
     CASH_FLOW_STATEMENT_COLUMNS,
@@ -42,8 +57,10 @@ from market_data.universe import (
 )
 from scripts.download_daily_bars import main
 from scripts.download_financials import main as financials_main
+from scripts.download_historical_prices_subset import main as historical_prices_subset_main
 from scripts.download_ratios import main as ratios_main
 from scripts.download_related_tickers import main as related_tickers_main
+from scripts.download_ticker_universe import main as ticker_universe_main
 from scripts.download_ticker_details import main as ticker_details_main
 from scripts.download_tickers import main as tickers_main
 
@@ -129,6 +146,65 @@ def test_massive_client_error_message_omits_api_key():
         assert exc.status_code == 403
     else:
         raise AssertionError("Expected MassiveHttpError")
+
+
+def test_nasdaq_data_link_client_collects_paginated_table_rows():
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "datatable": {
+                        "data": [["AAPL", "2018-09-04", 100.0]],
+                        "columns": [
+                            {"name": "ticker"},
+                            {"name": "date"},
+                            {"name": "close"},
+                        ],
+                    },
+                    "meta": {"next_cursor_id": "cursor-1"},
+                },
+            ),
+            FakeResponse(
+                200,
+                {
+                    "datatable": {
+                        "data": [["MSFT", "2018-09-04", 200.0]],
+                        "columns": [
+                            {"name": "ticker"},
+                            {"name": "date"},
+                            {"name": "close"},
+                        ],
+                    },
+                    "meta": {"next_cursor_id": None},
+                },
+            ),
+        ]
+    )
+    client = NasdaqDataLinkClient(api_key="test-key", session=session)
+
+    rows = client.get_table("SHARADAR/SEP", params={"ticker": "AAPL,MSFT"})
+
+    assert rows == [
+        {"ticker": "AAPL", "date": "2018-09-04", "close": 100.0},
+        {"ticker": "MSFT", "date": "2018-09-04", "close": 200.0},
+    ]
+    assert session.calls[0]["params"]["api_key"] == "test-key"
+    assert session.calls[0]["params"]["ticker"] == "AAPL,MSFT"
+    assert session.calls[1]["params"]["qopts.cursor_id"] == "cursor-1"
+
+
+def test_nasdaq_data_link_client_error_message_omits_api_key():
+    session = FakeSession([FakeResponse(403, text="forbidden")])
+    client = NasdaqDataLinkClient(api_key="secret-key", session=session)
+
+    try:
+        client.get_json("/api/v3/datatables/SHARADAR/SEP.json")
+    except NasdaqDataLinkError as exc:
+        assert "secret-key" not in str(exc)
+        assert exc.status_code == 403
+    else:
+        raise AssertionError("Expected NasdaqDataLinkError")
 
 
 def test_fetch_ticker_universe_normalizes_and_sorts_rows():
@@ -1153,3 +1229,354 @@ def test_download_script_filters_to_ticker_universe_by_default(tmp_path, monkeyp
     assert exit_code == 0
     assert metadata["ticker_universe_filter"]["enabled"] is True
     assert metadata["ticker_universe_filter"]["input_tickers"] == 1
+
+
+def test_normalize_price_frame_uses_canonical_schema():
+    rows = [
+        {
+            "ticker": "msft",
+            "date": "2018-09-04",
+            "open": "110.85",
+            "high": "111.95",
+            "low": "110.22",
+            "close": "111.71",
+            "volume": "22634600",
+            "lastupdated": "2026-05-11",
+        },
+        {
+            "ticker": "AAPL",
+            "date": "2018-09-04",
+            "open": 57.1,
+            "high": 57.29,
+            "low": 56.66,
+            "close": 57.09,
+            "volume": 109560400,
+            "lastupdated": "2026-05-11",
+        },
+    ]
+
+    normalized = normalize_price_frame(pd.DataFrame(rows))
+
+    assert list(normalized.columns) == CANONICAL_PRICE_COLUMNS
+    assert normalized["symbol"].tolist() == ["AAPL", "MSFT"]
+    assert normalized["date"].tolist() == [date(2018, 9, 4), date(2018, 9, 4)]
+    assert normalized["close"].tolist() == [57.09, 111.71]
+    assert normalized["lastupdated"].tolist() == [date(2026, 5, 11), date(2026, 5, 11)]
+
+
+def test_download_and_write_ticker_universe_writes_all_and_filtered(tmp_path, monkeypatch):
+    def fake_downloader(api_key):
+        assert api_key == "test-key"
+        return [
+            {
+                "table": "SEP",
+                "permaticker": "1",
+                "ticker": "AAPL",
+                "name": "Apple",
+                "exchange": "NASDAQ",
+                "isdelisted": "N",
+                "category": "Domestic Common Stock",
+                "scalemarketcap": "6 - Mega",
+                "currency": "USD",
+            },
+            {
+                "table": "SEP",
+                "permaticker": "2",
+                "ticker": "ZZZ",
+                "name": "Tiny",
+                "exchange": "NASDAQ",
+                "isdelisted": "N",
+                "category": "Domestic Common Stock",
+                "scalemarketcap": "2 - Micro",
+                "currency": "USD",
+            },
+        ]
+
+    monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
+    paths = download_and_write_ticker_universe(output_dir=tmp_path, downloader=fake_downloader)
+    tickers_all = pd.read_parquet(paths["tickers_all"])
+    tickers = pd.read_parquet(paths["tickers"])
+    metadata = json.loads((tmp_path / "tickers.metadata.json").read_text(encoding="utf-8"))
+
+    assert paths["tickers_all"] == tmp_path / "tickers_all.parquet"
+    assert tickers_all["ticker"].tolist() == ["AAPL", "ZZZ"]
+    assert tickers["ticker"].tolist() == ["AAPL"]
+    assert metadata["provider"] == "sharadar"
+    assert metadata["variant"] == "tickers"
+    assert metadata["filter"]["market_caps"] == ["4 - Mid", "5 - Large", "6 - Mega"]
+
+
+def test_filter_tickers_keeps_active_mid_large_common_stocks():
+    frame = normalize_tickers_frame(
+        pd.DataFrame(
+            [
+                {
+                    "table": "SEP",
+                    "ticker": "AAPL",
+                    "exchange": "NASDAQ",
+                    "isdelisted": "N",
+                    "category": "Domestic Common Stock",
+                    "scalemarketcap": "6 - Mega",
+                },
+                {
+                    "table": "SEP",
+                    "ticker": "MICRO",
+                    "exchange": "NASDAQ",
+                    "isdelisted": "N",
+                    "category": "Domestic Common Stock",
+                    "scalemarketcap": "2 - Micro",
+                },
+                {
+                    "table": "SEP",
+                    "ticker": "PREF",
+                    "exchange": "NYSE",
+                    "isdelisted": "N",
+                    "category": "Domestic Preferred Stock",
+                    "scalemarketcap": "5 - Large",
+                },
+            ]
+        )
+    )
+
+    filtered = filter_tickers(frame)
+
+    assert filtered["ticker"].tolist() == ["AAPL"]
+
+
+def test_build_historical_subset_from_csv_file_filters_to_ticker_universe(tmp_path):
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir()
+    pd.DataFrame({"ticker": ["AAPL"]}).to_parquet(reference_dir / "tickers.parquet", index=False)
+    input_file = tmp_path / "sep.csv"
+    input_file.write_text(
+        "\n".join(
+            [
+                "ticker,date,open,high,low,close,volume,closeadj,closeunadj,lastupdated",
+                "MSFT,2018-09-04,110.85,111.95,110.22,111.71,22634600,105.0,111.71,2026-05-11",
+                "AAPL,2018-09-04,57.1,57.29,56.66,57.09,109560400,54.0,57.09,2026-05-11",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_path = build_historical_subset_from_files([input_file], reference_dir=reference_dir, output_dir=tmp_path, chunk_rows=1)
+    prices = pd.read_parquet(output_path)
+    metadata = json.loads((tmp_path / "historical_subset.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == tmp_path / HISTORICAL_SUBSET_PARQUET_FILE
+    assert prices["symbol"].tolist() == ["AAPL"]
+    assert metadata["provider"] == "sharadar"
+    assert metadata["variant"] == "historical_subset"
+    assert metadata["input_tickers"] == 1
+
+
+def test_request_bulk_price_files_uses_table_export(tmp_path, monkeypatch):
+    monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
+
+    class FakeExportClient:
+        def __init__(self):
+            self.calls = 0
+            self.downloaded_url = None
+
+        def get_table_export(self, table_code):
+            self.calls += 1
+            if self.calls == 1:
+                return {"datatable_bulk_download": {"file": {"status": "creating"}}}
+            return {
+                "datatable_bulk_download": {
+                    "file": {
+                        "status": "fresh",
+                        "link": "https://example.test/export.zip?token=abc",
+                        "data_snapshot_time": "2026-06-11T00:00:00Z",
+                    }
+                }
+            }
+
+        def download_file(self, url, output_path):
+            self.downloaded_url = url
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"zip-data")
+            return output_path
+
+    client = FakeExportClient()
+
+    paths = request_bulk_price_files(tmp_path, client=client, poll_seconds=0, max_polls=1)
+
+    assert paths == [tmp_path / "bulk_file_001.zip"]
+    assert paths[0].read_bytes() == b"zip-data"
+    assert client.calls == 2
+    assert client.downloaded_url == "https://example.test/export.zip?token=abc"
+
+
+def test_update_historical_subset_merges_lastupdated_rows(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    output_dir = tmp_path / "daily_bars"
+    reference_dir.mkdir()
+    output_dir.mkdir()
+    pd.DataFrame({"ticker": ["AAPL", "MSFT"]}).to_parquet(reference_dir / "tickers.parquet", index=False)
+    pd.DataFrame(
+        {
+            "date": [date(2018, 9, 4)],
+            "symbol": ["AAPL"],
+            "open": [50.0],
+            "high": [51.0],
+            "low": [49.0],
+            "close": [50.5],
+            "volume": [100],
+            "closeadj": [50.0],
+            "closeunadj": [50.5],
+            "lastupdated": [date(2026, 5, 10)],
+        }
+    ).to_parquet(output_dir / HISTORICAL_SUBSET_PARQUET_FILE, index=False)
+
+    calls = []
+
+    def fake_downloader(lastupdated_gte, api_key):
+        calls.append((lastupdated_gte, api_key))
+        assert lastupdated_gte == date(2026, 5, 11)
+        assert api_key == "test-key"
+        return [
+            {
+                "ticker": "AAPL",
+                "date": "2018-09-04",
+                "open": 57.1,
+                "high": 57.29,
+                "low": 56.66,
+                "close": 57.09,
+                "volume": 109560400,
+                "closeadj": 54.0,
+                "closeunadj": 57.09,
+                "lastupdated": "2026-05-11",
+            },
+            {
+                "ticker": "MSFT",
+                "date": "2018-09-04",
+                "open": 110.85,
+                "high": 111.95,
+                "low": 110.22,
+                "close": 111.71,
+                "volume": 22634600,
+                "closeadj": 105.0,
+                "closeunadj": 111.71,
+                "lastupdated": "2026-05-11",
+            },
+            {
+                "ticker": "ZZZ",
+                "date": "2018-09-04",
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 100,
+                "closeadj": 1.0,
+                "closeunadj": 1.0,
+                "lastupdated": "2026-05-11",
+            },
+        ]
+
+    monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
+    output_path = update_historical_subset(
+        lastupdated_gte=date(2026, 5, 11),
+        reference_dir=reference_dir,
+        output_dir=output_dir,
+        downloader=fake_downloader,
+    )
+    prices = pd.read_parquet(output_path)
+    metadata = json.loads((output_dir / "historical_subset.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == output_dir / HISTORICAL_SUBSET_PARQUET_FILE
+    assert calls == [(date(2026, 5, 11), "test-key")]
+    assert prices["symbol"].tolist() == ["AAPL", "MSFT"]
+    assert prices.loc[prices["symbol"] == "AAPL", "close"].item() == 57.09
+    assert metadata["variant"] == "historical_subset"
+    assert metadata["update_filter"] == "lastupdated.gte"
+    assert metadata["input_tickers"] == 2
+    assert metadata["update_raw_rows"] == 3
+    assert metadata["update_rows"] == 2
+
+
+def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):
+    output_dir = tmp_path / "daily_bars"
+
+    def fake_download_and_write_ticker_universe(output_dir=None, downloader=None):
+        assert output_dir == str(tmp_path / "reference")
+        return {"tickers_all": tmp_path / "tickers_all.parquet", "tickers": tmp_path / "tickers.parquet"}
+
+    monkeypatch.setattr(
+        "scripts.download_ticker_universe.download_and_write_ticker_universe",
+        fake_download_and_write_ticker_universe,
+    )
+
+    exit_code = ticker_universe_main(["--output-dir", str(tmp_path / "reference")])
+
+    assert exit_code == 0
+
+
+def test_download_historical_prices_subset_cli_builds_from_input_file(tmp_path, monkeypatch):
+    input_file = tmp_path / "sep.csv"
+    input_file.write_text("ticker,date,open,high,low,close,volume,closeadj,closeunadj,lastupdated\n", encoding="utf-8")
+
+    def fake_build_historical_subset_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
+        assert input_files == [input_file]
+        assert reference_dir == str(tmp_path / "reference")
+        assert output_dir == str(tmp_path / "daily_bars")
+        assert chunk_rows == 10
+        return tmp_path / "daily_bars" / "historical_subset.parquet"
+
+    monkeypatch.setattr(
+        "scripts.download_historical_prices_subset.build_historical_subset_from_files",
+        fake_build_historical_subset_from_files,
+    )
+
+    exit_code = historical_prices_subset_main(
+        [
+            "--input-file",
+            str(input_file),
+            "--reference-dir",
+            str(tmp_path / "reference"),
+            "--output-dir",
+            str(tmp_path / "daily_bars"),
+            "--chunk-rows",
+            "10",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_download_historical_prices_subset_cli_defaults_to_bulk_download(tmp_path, monkeypatch):
+    bulk_file = tmp_path / "bulk.parquet"
+
+    def fake_request_bulk_price_files(raw_export_dir=None, poll_seconds=60.0, max_polls=30):
+        assert raw_export_dir is None
+        assert poll_seconds == 0
+        assert max_polls == 1
+        return [bulk_file]
+
+    def fake_build_historical_subset_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
+        assert input_files == [bulk_file]
+        assert output_dir == str(tmp_path / "daily_bars")
+        return tmp_path / "daily_bars" / "historical_subset.parquet"
+
+    monkeypatch.setattr(
+        "scripts.download_historical_prices_subset.request_bulk_price_files",
+        fake_request_bulk_price_files,
+    )
+    monkeypatch.setattr(
+        "scripts.download_historical_prices_subset.build_historical_subset_from_files",
+        fake_build_historical_subset_from_files,
+    )
+
+    exit_code = historical_prices_subset_main(
+        [
+            "--output-dir",
+            str(tmp_path / "daily_bars"),
+            "--poll-seconds",
+            "0",
+            "--max-polls",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0

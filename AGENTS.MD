@@ -7,7 +7,8 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - This repo was split out from the main Finbot modeling repo.
 - Other finbot repos should own feature engineering, preprocessing, model training, and inference.
 - This repo should only download, normalize, and store market data.
-- The current data provider is Massive, formerly Polygon.
+- Finbot is migrating canonical daily prices to Sharadar via Nasdaq Data Link.
+- Massive provider code remains as legacy migration context while the Sharadar path is tested.
 - Alpaca provider code may exist as migration context, but new work should not use Alpaca unless explicitly requested.
 - This is intentionally not an installable Python package right now. Do not add packaging metadata, console scripts, or a `src/` package layout unless the user asks to revisit that decision.
 
@@ -17,10 +18,10 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - `market_data/`: shared implementation code used by scripts.
 - `market_data/providers/`: provider-specific API adapters.
 - `market_data/datasets/`: dataset-specific orchestration.
-- `market_data/http.py`: shared Massive HTTP client, pagination, retry, throttling, and sanitized errors.
+- `market_data/http.py`: legacy shared Massive HTTP client, pagination, retry, throttling, and sanitized errors.
 - `market_data/storage.py`: shared parquet and metadata writing for daily bars.
 - `market_data/universe.py`: ticker universe fetching, filtering, reading, and writing.
-- `tests/`: pytest coverage for normalization, storage, CLI behavior, Massive HTTP behavior, and ticker filtering.
+- `tests/`: pytest coverage for normalization, storage, CLI behavior, provider clients, and ticker filtering.
 - `data/`: local output directory, ignored by git.
 - `Dockerfile` and `compose.yaml`: container workflow for scheduled jobs.
 
@@ -37,15 +38,19 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Preserve support for `.env` and environment variables.
 - Preserve Docker Compose support for homelab scheduling.
 - When adding a new data-pull script, add a matching Docker Compose service that reuses the shared image, environment, data mount, and Docker entrypoint.
-- When adding a new Massive endpoint, use the shared Massive HTTP client unless there is a clear reason not to.
+- When adding a new Nasdaq Data Link endpoint, keep the client small and sanitize API keys from errors.
 - When adding per-symbol jobs, use `data/reference/tickers.parquet` as the ticker universe input instead of hardcoding ticker lists.
 
 ## Data Storage Mental Model
 
-- Daily bars are currently maintained as a replace-style historical snapshot.
-- The default daily bars output is `data/daily_bars/historical.parquet`.
-- When `FINBOT_DATA_ROOT` is set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars/historical.parquet`.
-- The daily bars metadata file is `data/daily_bars/historical.metadata.json`.
+- Daily prices are maintained as a filtered Finbot subset built from provider table export files.
+- The filtered daily price output is `data/daily_bars/historical_subset.parquet`.
+- When `FINBOT_DATA_ROOT` is set, daily prices default to `FINBOT_DATA_ROOT/market/daily_bars`.
+- Daily price metadata uses a matching `historical_subset.metadata.json` sidecar.
+- Initial daily price backfills download raw export files under `data/raw/exports/daily_bars`, or `FINBOT_DATA_ROOT/raw/exports/daily_bars` when `FINBOT_DATA_ROOT` is set.
+- Daily price updates use one paginated `lastupdated.gte` query across the SEP table, filter locally to `tickers.parquet`, and merge by `symbol,date`.
+- Do not create provider-specific dataset names; put provider/source fields in metadata JSON.
+- The full Sharadar ticker universe output is `data/reference/tickers_all.parquet`.
 - The ticker universe output is `data/reference/tickers.parquet`.
 - When `FINBOT_DATA_ROOT` is set, reference datasets default to `FINBOT_DATA_ROOT/reference`.
 - The ticker universe metadata file is `data/reference/tickers.metadata.json`.
@@ -55,7 +60,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 ## Docker Mental Model
 
 - Containers are intended for scheduled homelab operation.
-- Compose reads `.env` for `MASSIVE_API_KEY`.
+- Compose reads `.env` for `NASDAQ_DATA_LINK_API_KEY` and legacy `MASSIVE_API_KEY`.
 - Compose mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to container `/data`.
 - The Docker entrypoint creates output directories, fixes ownership, then drops privileges to `HOST_UID:HOST_GID`.
 - Compose passes `HOST_UID` and `HOST_GID` into the container so output files are host-user owned instead of root-owned.
@@ -79,7 +84,7 @@ python -m compileall market_data scripts
 pytest
 ```
 
-Tests should avoid real Massive API calls. Use fake clients, fake sessions, temporary directories, and deterministic dates.
+Tests should avoid real provider API calls. Use fake clients, fake sessions, temporary directories, and deterministic dates.
 
 ## README And Roadmap
 
