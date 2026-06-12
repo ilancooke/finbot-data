@@ -7,8 +7,8 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - This repo was split out from the main Finbot modeling repo.
 - Other finbot repos should own feature engineering, preprocessing, model training, and inference.
 - This repo should only download, normalize, and store market data.
-- Finbot is migrating canonical daily prices to Sharadar via Nasdaq Data Link.
-- Massive provider code remains as legacy migration context while the Sharadar path is tested.
+- Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices.
+- Massive provider code remains as legacy migration context for older reference and fundamentals workflows.
 - Alpaca provider code may exist as migration context, but new work should not use Alpaca unless explicitly requested.
 - This is intentionally not an installable Python package right now. Do not add packaging metadata, console scripts, or a `src/` package layout unless the user asks to revisit that decision.
 
@@ -40,13 +40,14 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - When adding a new data-pull script, add a matching Docker Compose service that reuses the shared image, environment, data mount, and Docker entrypoint.
 - When adding a new Nasdaq Data Link endpoint, keep the client small and sanitize API keys from errors.
 - When adding per-symbol jobs, use `data/reference/tickers.parquet` as the ticker universe input instead of hardcoding ticker lists.
+- Treat legacy Massive daily bars and ticker universe scripts as overwrite-risk migration tools because they write the same canonical filenames as the current Sharadar datasets.
 
 ## Data Storage Mental Model
 
-- Daily prices are maintained as a filtered Finbot subset built from provider table export files.
-- The filtered daily price output is `data/daily_bars/historical_subset.parquet`.
+- Daily prices are maintained as the canonical Finbot historical dataset built from Nasdaq Data Link Sharadar SEP table export files.
+- The filtered daily price output is `data/daily_bars/historical.parquet`.
 - When `FINBOT_DATA_ROOT` is set, daily prices default to `FINBOT_DATA_ROOT/market/daily_bars`.
-- Daily price metadata uses a matching `historical_subset.metadata.json` sidecar.
+- Daily price metadata uses a matching `historical.metadata.json` sidecar.
 - Initial daily price backfills download raw export files under `data/raw/exports/daily_bars`, or `FINBOT_DATA_ROOT/raw/exports/daily_bars` when `FINBOT_DATA_ROOT` is set.
 - Daily price updates use one paginated `lastupdated.gte` query across the SEP table, filter locally to `tickers.parquet`, and merge by `symbol,date`.
 - Do not create provider-specific dataset names; put provider/source fields in metadata JSON.

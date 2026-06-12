@@ -27,8 +27,8 @@ DEFAULT_REFERENCE_DIR = Path("data/reference")
 DEFAULT_RAW_EXPORT_DIR = Path("data/raw/exports/daily_bars")
 DEFAULT_CSV_CHUNK_ROWS = 500_000
 
-HISTORICAL_SUBSET_PARQUET_FILE = "historical_subset.parquet"
-HISTORICAL_SUBSET_METADATA_FILE = "historical_subset.metadata.json"
+HISTORICAL_PARQUET_FILE = "historical.parquet"
+HISTORICAL_METADATA_FILE = "historical.metadata.json"
 
 CANONICAL_PRICE_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "volume", "closeadj", "closeunadj", "lastupdated"]
 TABLE_COLUMNS = ["ticker", "date", "open", "high", "low", "close", "volume", "closeadj", "closeunadj", "lastupdated"]
@@ -149,13 +149,13 @@ def request_bulk_price_files(
     return [client.download_file(url, output_path)]
 
 
-def build_historical_subset_from_files(
+def build_historical_from_files(
     input_files: Iterable[str | Path],
     reference_dir: str | Path | None = None,
     output_dir: str | Path | None = None,
     chunk_rows: int = DEFAULT_CSV_CHUNK_ROWS,
 ) -> Path:
-    """Stream bulk/export price files and write only the filtered Finbot subset."""
+    """Stream bulk/export price files and write the canonical Finbot historical dataset."""
 
     resolved_output_dir = resolve_output_dir(output_dir)
     resolved_reference_dir = resolve_reference_dir(reference_dir)
@@ -163,14 +163,15 @@ def build_historical_subset_from_files(
     universe = pd.read_parquet(universe_path)
     allowed = set(universe["ticker"].dropna().astype(str).str.upper().tolist())
     input_paths = [Path(path) for path in input_files]
-    output_path = resolved_output_dir / HISTORICAL_SUBSET_PARQUET_FILE
-    metadata_path = resolved_output_dir / HISTORICAL_SUBSET_METADATA_FILE
+    output_path = resolved_output_dir / HISTORICAL_PARQUET_FILE
+    metadata_path = resolved_output_dir / HISTORICAL_METADATA_FILE
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
 
     temp_output_path = output_path.with_name(f".{output_path.name}.tmp")
     writer: pq.ParquetWriter | None = None
     rows = 0
     symbols: set[str] = set()
+    dates: list[date] = []
 
     try:
         for frame in _iter_price_frames(input_paths, chunk_rows=chunk_rows):
@@ -183,6 +184,11 @@ def build_historical_subset_from_files(
                 continue
             rows += len(filtered)
             symbols.update(filtered["symbol"].dropna().astype(str).unique().tolist())
+            chunk_min, chunk_max = date_range(filtered)
+            if chunk_min is not None:
+                dates.append(chunk_min)
+            if chunk_max is not None:
+                dates.append(chunk_max)
             table = pa.Table.from_pandas(filtered, preserve_index=False)
             if writer is None:
                 writer = pq.ParquetWriter(temp_output_path, table.schema)
@@ -194,6 +200,8 @@ def build_historical_subset_from_files(
     if writer is None:
         pd.DataFrame(columns=CANONICAL_PRICE_COLUMNS).to_parquet(temp_output_path, index=False)
     temp_output_path.replace(output_path)
+    data_min_date = min(dates).isoformat() if dates else None
+    data_max_date = max(dates).isoformat() if dates else None
 
     write_metadata(
         metadata_path,
@@ -206,19 +214,21 @@ def build_historical_subset_from_files(
                 "ticker_universe_file": str(universe_path),
                 "input_tickers": len(allowed),
                 "source_columns": TABLE_COLUMNS,
+                "data_min_date": data_min_date,
+                "data_max_date": data_max_date,
             },
         ),
     )
     return output_path
 
 
-def update_historical_subset(
+def update_historical(
     lastupdated_gte: date,
     reference_dir: str | Path | None = None,
     output_dir: str | Path | None = None,
     downloader: RowsDownloader | None = None,
 ) -> Path:
-    """Fetch rows updated since lastupdated_gte, filter locally, and merge into historical_subset."""
+    """Fetch rows updated since lastupdated_gte, filter locally, and merge into historical."""
 
     resolved_output_dir = resolve_output_dir(output_dir)
     resolved_reference_dir = resolve_reference_dir(reference_dir)
@@ -234,7 +244,7 @@ def update_historical_subset(
     if not updates.empty:
         updates = updates[updates["symbol"].astype(str).str.upper().isin(allowed)].copy()
         updates = _normalize_canonical_price_frame(updates)
-    source_path = resolved_output_dir / HISTORICAL_SUBSET_PARQUET_FILE
+    source_path = resolved_output_dir / HISTORICAL_PARQUET_FILE
     existing = pd.read_parquet(source_path) if source_path.exists() else pd.DataFrame(columns=CANONICAL_PRICE_COLUMNS)
     frames = [frame for frame in [existing, updates] if not frame.empty]
     merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=CANONICAL_PRICE_COLUMNS)
@@ -244,7 +254,7 @@ def update_historical_subset(
         .sort_values(["symbol", "date"])
         .reset_index(drop=True)
     )
-    return write_historical_subset_snapshot(
+    return write_historical_snapshot(
         merged,
         resolved_output_dir,
         metadata_extra={
@@ -258,23 +268,29 @@ def update_historical_subset(
     )
 
 
-def write_historical_subset_snapshot(
+def write_historical_snapshot(
     prices: pd.DataFrame,
     output_dir: str | Path,
     metadata_extra: dict[str, Any] | None = None,
 ) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / HISTORICAL_SUBSET_PARQUET_FILE
-    metadata_path = output_dir / HISTORICAL_SUBSET_METADATA_FILE
+    output_path = output_dir / HISTORICAL_PARQUET_FILE
+    metadata_path = output_dir / HISTORICAL_METADATA_FILE
     normalized = _normalize_canonical_price_frame(prices)
+    data_min_date, data_max_date = date_range(normalized)
     normalized.to_parquet(output_path, index=False)
     write_metadata(
         metadata_path,
         base_metadata(
             rows=len(normalized),
             symbols=int(normalized["symbol"].nunique()) if "symbol" in normalized.columns else 0,
-            extra={"parquet_file": output_path.name, **(metadata_extra or {})},
+            extra={
+                "parquet_file": output_path.name,
+                "data_min_date": data_min_date.isoformat() if data_min_date is not None else None,
+                "data_max_date": data_max_date.isoformat() if data_max_date is not None else None,
+                **(metadata_extra or {}),
+            },
         ),
     )
     return output_path
@@ -300,12 +316,21 @@ def base_metadata(*, rows: int, symbols: int, extra: dict[str, Any] | None = Non
         "source": SOURCE,
         "source_table": SEP_TABLE,
         "dataset": "daily_bars",
-        "variant": "historical_subset",
+        "variant": "historical",
         "mode": "replace",
         "rows": rows,
         "symbols": symbols,
         **(extra or {}),
     }
+
+
+def date_range(prices: pd.DataFrame) -> tuple[date | None, date | None]:
+    if prices.empty or "date" not in prices.columns:
+        return None, None
+    dates = pd.to_datetime(prices["date"], errors="coerce").dropna()
+    if dates.empty:
+        return None, None
+    return dates.min().date(), dates.max().date()
 
 
 def _normalize_input_price_frame(prices: pd.DataFrame) -> pd.DataFrame:

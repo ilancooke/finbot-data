@@ -4,7 +4,7 @@ Plain-script market data downloader for Finbot.
 
 This repository only downloads, normalizes, and stores market data. Feature engineering, preprocessing, model training, inference, and dashboard code live elsewhere.
 
-Finbot is migrating canonical daily prices from Massive to Sharadar via Nasdaq Data Link. Massive scripts still exist as legacy migration context until the Sharadar path has fully replaced them.
+Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices. Massive scripts still exist as legacy migration context for older reference and fundamentals workflows.
 
 ## Setup
 
@@ -57,24 +57,24 @@ This writes:
 
 The filtered `tickers.parquet` currently keeps active domestic mid, large, and mega cap common stocks on `NASDAQ`, `NYSE`, or `NYSEMKT`.
 
-Download a Nasdaq Data Link table export and build the filtered historical price subset:
+Download a Nasdaq Data Link table export and build the historical daily price dataset:
 
 ```bash
 FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
 NASDAQ_DATA_LINK_API_KEY=... \
-python scripts/download_historical_prices_subset.py
+python scripts/download_historical_prices.py
 ```
 
 This downloads the provider table export zip under `FINBOT_DATA_ROOT/raw/exports/daily_bars`, streams through it in chunks, filters to `reference/tickers.parquet`, and writes:
 
-- `FINBOT_DATA_ROOT/market/daily_bars/historical_subset.parquet`
-- `FINBOT_DATA_ROOT/market/daily_bars/historical_subset.metadata.json`
+- `FINBOT_DATA_ROOT/market/daily_bars/historical.parquet`
+- `FINBOT_DATA_ROOT/market/daily_bars/historical.metadata.json`
 
 If you already have an export file, you can convert it directly instead:
 
 ```bash
 FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
-python scripts/download_historical_prices_subset.py \
+python scripts/download_historical_prices.py \
   --input-file /path/to/SHARADAR_SEP.zip
 ```
 
@@ -83,7 +83,7 @@ Daily scheduled updates use one paginated `lastupdated` filter across the SEP ta
 ```bash
 FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
 NASDAQ_DATA_LINK_API_KEY=... \
-python scripts/update_historical_prices_subset.py --lastupdated-gte 2026-06-11
+python scripts/update_historical_prices.py --lastupdated-gte 2026-06-11
 ```
 
 The price datasets use this schema:
@@ -101,9 +101,11 @@ The price datasets use this schema:
 | `closeunadj` | float | Sharadar SEP unadjusted close |
 | `lastupdated` | date | Provider row update date |
 
-Metadata records include `provider=sharadar`, `source=nasdaq_data_link`, source table, variant, input files, row counts, and ticker counts.
+Metadata records include `provider=sharadar`, `source=nasdaq_data_link`, source table, variant, row counts, ticker counts, and data date bounds. Initial backfill metadata also records input files; daily update metadata records update filters and row counts.
 
 ## Legacy Massive Daily Bars
+
+This is a legacy workflow. It writes the same `historical.parquet` and `historical.metadata.json` filenames as the canonical Sharadar workflow, so do not run it unless you intentionally want to replace the current Sharadar-backed daily price dataset.
 
 Use the script directly from the repository root:
 
@@ -113,7 +115,7 @@ python scripts/download_daily_bars.py --end-date 2026-05-01 --years 2
 
 By default, local script runs write under this repository's `data/` directory. For a shared multipackage data root, set `FINBOT_DATA_ROOT`; daily bars then write to `FINBOT_DATA_ROOT/market/daily_bars` unless `FINBOT_RAW_BARS_DIR` is set.
 
-The scheduled production path downloads a rolling adjusted history window from Massive grouped daily bars, filters to the current `tickers.parquet` universe, then replaces the existing snapshot. By default, request pacing is disabled. Use `--calls-per-minute N` if you need explicit pacing for a lower-throughput plan. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
+The legacy path downloads a rolling adjusted history window from Massive grouped daily bars, filters to the current `tickers.parquet` universe, then replaces the existing snapshot. By default, request pacing is disabled. Use `--calls-per-minute N` if you need explicit pacing for a lower-throughput plan. The start date is calculated as the day after the exact year boundary, so `--end-date 2026-05-01 --years 2` starts at `2024-05-02`.
 
 The script requests weekdays in the date window. It does not use a NYSE holiday calendar; holidays and other dates with no returned data are recorded in `empty_market_dates`.
 
@@ -155,6 +157,8 @@ The script writes:
 If `historical.parquet` already exists in replace mode, it is atomically replaced by the freshly downloaded window. Single-day mode also writes a fresh one-day snapshot and is intended for smoke/debug runs.
 
 ## Legacy Massive Ticker Universe
+
+This is a legacy workflow. It writes the same `tickers.parquet` and `tickers.metadata.json` filenames as the canonical Sharadar ticker universe, so do not run it unless you intentionally want to replace the current Sharadar-backed universe.
 
 Download the current S&P 500 known universe, validated against Massive's active US
 common-stock universe:
@@ -311,7 +315,7 @@ Supported Finbot environment variables:
 - `FINBOT_KNOWN_UNIVERSE_FILE`: CSV file containing a `Symbol` or `Ticker` column for the selected known universe.
 - `FINBOT_RATIOS_DIR`: ratios output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_FINANCIALS_DIR`: financial statements output directory fallback when `--output-dir` is not supplied.
-- `FINBOT_RAW_EXPORT_DIR`: raw downloaded daily price bulk file directory fallback when `--raw-export-dir` is not supplied.
+- `FINBOT_RAW_EXPORT_DIR`: raw downloaded daily price export file directory fallback when `--raw-export-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
 - `FINBOT_HISTORY_YEARS`: default history window for `--end-date` mode. Defaults to `2`.
 - `FINBOT_FINANCIALS_HISTORY_YEARS`: default financial statements history window. Defaults to `FINBOT_HISTORY_YEARS`, then `2`.
@@ -325,7 +329,7 @@ Massive's free Stocks Basic plan was historically expected to provide 5 calls pe
 
 ## Output Schema
 
-Current Sharadar-backed daily prices are written to `historical_subset.parquet` with this schema:
+Current Sharadar-backed daily prices are written to `historical.parquet` with this schema:
 
 | Column | Type | Description |
 | --- | --- | --- |
@@ -340,7 +344,7 @@ Current Sharadar-backed daily prices are written to `historical_subset.parquet` 
 | `closeunadj` | float | Sharadar SEP unadjusted close |
 | `lastupdated` | date | Provider row update date |
 
-`historical_subset.metadata.json` always includes:
+`historical.metadata.json` always includes:
 
 - `collected_date_utc`
 - `collected_at_utc`
@@ -352,6 +356,8 @@ Current Sharadar-backed daily prices are written to `historical_subset.parquet` 
 - `mode`
 - `rows`
 - `symbols`
+- `data_min_date`
+- `data_max_date`
 - `parquet_file`
 
 Initial backfill metadata also includes:
@@ -423,7 +429,7 @@ The filtered `tickers.metadata.json` also includes:
 - `input_rows`
 - `filter`
 
-Legacy Massive `historical.parquet`, written by `scripts/download_daily_bars.py`, uses this canonical daily bar schema:
+Legacy Massive `historical.parquet`, written by `scripts/download_daily_bars.py`, uses this older daily bar schema:
 
 | Column | Type | Description |
 | --- | --- | --- |
@@ -669,13 +675,15 @@ Financial statement metadata files always include:
 ## Local Tests
 
 ```bash
-pytest
+.venv/bin/python -m compileall market_data scripts
+.venv/bin/python -m pytest
 ```
 
-Optional syntax check:
+If `.venv` is unavailable, use the active Python environment:
 
 ```bash
 python -m compileall market_data scripts
+pytest
 ```
 
 ## Docker
@@ -702,10 +710,10 @@ Show ticker-universe workflow help:
 docker compose run --rm finbot-ticker-universe --help
 ```
 
-Show historical subset download/build help:
+Show historical download/build help:
 
 ```bash
-docker compose run --rm finbot-historical-prices-subset --help
+docker compose run --rm finbot-historical-prices --help
 ```
 
 Show incremental historical update help:
@@ -714,7 +722,7 @@ Show incremental historical update help:
 docker compose run --rm finbot-update-historical-prices --help
 ```
 
-Show ticker universe help:
+Show legacy Massive ticker universe help:
 
 ```bash
 docker compose run --rm finbot-tickers --help
@@ -744,7 +752,7 @@ Show financials help:
 docker compose run --rm finbot-financials --help
 ```
 
-No-network smoke test:
+Legacy Massive no-network smoke test:
 
 ```bash
 docker compose run --rm \
@@ -765,21 +773,20 @@ Download the ticker universe from Nasdaq Data Link:
 docker compose run --rm finbot-ticker-universe
 ```
 
-Full history refresh:
+Download/build the canonical historical daily prices from Nasdaq Data Link:
+
+```bash
+docker compose run --rm finbot-historical-prices
+```
+
+Run an incremental daily price update:
 
 ```bash
 docker compose run --rm \
-  finbot-data --end-date 2026-05-01 --years 2
+  finbot-update-historical-prices --lastupdated-gte 2026-06-11
 ```
 
-For a scheduled homelab run, let the host provide the date:
-
-```bash
-docker compose run --rm \
-  finbot-data --end-date "$(date +%F)" --years 2
-```
-
-Download the filtered ticker universe from the container:
+Legacy Massive ticker universe from the container:
 
 ```bash
 docker compose run --rm finbot-tickers

@@ -1,4 +1,4 @@
-"""Download/export daily prices and write the filtered historical_subset dataset."""
+"""Download/export daily prices and write the filtered historical dataset."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from market_data.datasets.daily_prices import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_RAW_EXPORT_DIR,
     DEFAULT_REFERENCE_DIR,
-    build_historical_subset_from_files,
+    build_historical_from_files,
     request_bulk_price_files,
 )
 
@@ -32,7 +32,7 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download/build historical_subset daily prices")
+    parser = argparse.ArgumentParser(description="Download/build historical daily prices")
     parser.add_argument(
         "--input-file",
         action="append",
@@ -46,7 +46,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--reference-dir", default=None, help=f"Directory containing tickers.parquet. Default: {DEFAULT_REFERENCE_DIR}")
     parser.add_argument("--raw-export-dir", default=None, help=f"Directory for downloaded export files. Default: {DEFAULT_RAW_EXPORT_DIR}")
-    parser.add_argument("--output-dir", default=None, help=f"Output directory for historical_subset.parquet. Default: {DEFAULT_OUTPUT_DIR}")
+    parser.add_argument("--output-dir", default=None, help=f"Output directory for historical.parquet. Default: {DEFAULT_OUTPUT_DIR}")
     parser.add_argument("--chunk-rows", type=int, default=DEFAULT_CSV_CHUNK_ROWS, help=f"Rows per conversion chunk. Default: {DEFAULT_CSV_CHUNK_ROWS}")
     parser.add_argument("--poll-seconds", type=float, default=60.0, help="Seconds to wait between export status checks. Default: 60.")
     parser.add_argument("--max-polls", type=int, default=30, help="Maximum export status checks after the first request. Default: 30.")
@@ -76,16 +76,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_polls=args.max_polls,
                 )
             )
-        output_path = build_historical_subset_from_files(
+        output_path = build_historical_from_files(
             input_files,
             reference_dir=args.reference_dir,
             output_dir=args.output_dir,
             chunk_rows=args.chunk_rows,
         )
-        logger.info("Built historical_subset output=%s total_time=%.3fs", output_path, time.perf_counter() - started)
+        logger.info("Built historical output=%s total_time=%.3fs", output_path, time.perf_counter() - started)
         return 0
     except Exception:
-        logger.exception("Building historical_subset failed")
+        logger.exception("Building historical failed")
         return 1
 
 

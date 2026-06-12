@@ -10,11 +10,11 @@ from market_data.datasets import daily_bars
 from market_data.datasets.daily_bars import days_window_start_date, download_history, window_start_date
 from market_data.datasets.daily_prices import (
     CANONICAL_PRICE_COLUMNS,
-    HISTORICAL_SUBSET_PARQUET_FILE,
-    build_historical_subset_from_files,
+    HISTORICAL_PARQUET_FILE,
+    build_historical_from_files,
     normalize_price_frame,
     request_bulk_price_files,
-    update_historical_subset,
+    update_historical,
 )
 from market_data.datasets.financials import download_financials_history, read_financial_statement
 from market_data.datasets.ratios import download_ratios_snapshot, read_ratios
@@ -57,7 +57,7 @@ from market_data.universe import (
 )
 from scripts.download_daily_bars import main
 from scripts.download_financials import main as financials_main
-from scripts.download_historical_prices_subset import main as historical_prices_subset_main
+from scripts.download_historical_prices import main as historical_prices_main
 from scripts.download_ratios import main as ratios_main
 from scripts.download_related_tickers import main as related_tickers_main
 from scripts.download_ticker_universe import main as ticker_universe_main
@@ -1343,7 +1343,7 @@ def test_filter_tickers_keeps_active_mid_large_common_stocks():
     assert filtered["ticker"].tolist() == ["AAPL"]
 
 
-def test_build_historical_subset_from_csv_file_filters_to_ticker_universe(tmp_path):
+def test_build_historical_from_csv_file_filters_to_ticker_universe(tmp_path):
     reference_dir = tmp_path / "reference"
     reference_dir.mkdir()
     pd.DataFrame({"ticker": ["AAPL"]}).to_parquet(reference_dir / "tickers.parquet", index=False)
@@ -1359,15 +1359,17 @@ def test_build_historical_subset_from_csv_file_filters_to_ticker_universe(tmp_pa
         encoding="utf-8",
     )
 
-    output_path = build_historical_subset_from_files([input_file], reference_dir=reference_dir, output_dir=tmp_path, chunk_rows=1)
+    output_path = build_historical_from_files([input_file], reference_dir=reference_dir, output_dir=tmp_path, chunk_rows=1)
     prices = pd.read_parquet(output_path)
-    metadata = json.loads((tmp_path / "historical_subset.metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads((tmp_path / "historical.metadata.json").read_text(encoding="utf-8"))
 
-    assert output_path == tmp_path / HISTORICAL_SUBSET_PARQUET_FILE
+    assert output_path == tmp_path / HISTORICAL_PARQUET_FILE
     assert prices["symbol"].tolist() == ["AAPL"]
     assert metadata["provider"] == "sharadar"
-    assert metadata["variant"] == "historical_subset"
+    assert metadata["variant"] == "historical"
     assert metadata["input_tickers"] == 1
+    assert metadata["data_min_date"] == "2018-09-04"
+    assert metadata["data_max_date"] == "2018-09-04"
 
 
 def test_request_bulk_price_files_uses_table_export(tmp_path, monkeypatch):
@@ -1409,7 +1411,7 @@ def test_request_bulk_price_files_uses_table_export(tmp_path, monkeypatch):
     assert client.downloaded_url == "https://example.test/export.zip?token=abc"
 
 
-def test_update_historical_subset_merges_lastupdated_rows(tmp_path, monkeypatch):
+def test_update_historical_merges_lastupdated_rows(tmp_path, monkeypatch):
     reference_dir = tmp_path / "reference"
     output_dir = tmp_path / "daily_bars"
     reference_dir.mkdir()
@@ -1428,7 +1430,7 @@ def test_update_historical_subset_merges_lastupdated_rows(tmp_path, monkeypatch)
             "closeunadj": [50.5],
             "lastupdated": [date(2026, 5, 10)],
         }
-    ).to_parquet(output_dir / HISTORICAL_SUBSET_PARQUET_FILE, index=False)
+    ).to_parquet(output_dir / HISTORICAL_PARQUET_FILE, index=False)
 
     calls = []
 
@@ -1476,24 +1478,26 @@ def test_update_historical_subset_merges_lastupdated_rows(tmp_path, monkeypatch)
         ]
 
     monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
-    output_path = update_historical_subset(
+    output_path = update_historical(
         lastupdated_gte=date(2026, 5, 11),
         reference_dir=reference_dir,
         output_dir=output_dir,
         downloader=fake_downloader,
     )
     prices = pd.read_parquet(output_path)
-    metadata = json.loads((output_dir / "historical_subset.metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads((output_dir / "historical.metadata.json").read_text(encoding="utf-8"))
 
-    assert output_path == output_dir / HISTORICAL_SUBSET_PARQUET_FILE
+    assert output_path == output_dir / HISTORICAL_PARQUET_FILE
     assert calls == [(date(2026, 5, 11), "test-key")]
     assert prices["symbol"].tolist() == ["AAPL", "MSFT"]
     assert prices.loc[prices["symbol"] == "AAPL", "close"].item() == 57.09
-    assert metadata["variant"] == "historical_subset"
+    assert metadata["variant"] == "historical"
     assert metadata["update_filter"] == "lastupdated.gte"
     assert metadata["input_tickers"] == 2
     assert metadata["update_raw_rows"] == 3
     assert metadata["update_rows"] == 2
+    assert metadata["data_min_date"] == "2018-09-04"
+    assert metadata["data_max_date"] == "2018-09-04"
 
 
 def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):
@@ -1513,23 +1517,23 @@ def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):
     assert exit_code == 0
 
 
-def test_download_historical_prices_subset_cli_builds_from_input_file(tmp_path, monkeypatch):
+def test_download_historical_prices_cli_builds_from_input_file(tmp_path, monkeypatch):
     input_file = tmp_path / "sep.csv"
     input_file.write_text("ticker,date,open,high,low,close,volume,closeadj,closeunadj,lastupdated\n", encoding="utf-8")
 
-    def fake_build_historical_subset_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
+    def fake_build_historical_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
         assert input_files == [input_file]
         assert reference_dir == str(tmp_path / "reference")
         assert output_dir == str(tmp_path / "daily_bars")
         assert chunk_rows == 10
-        return tmp_path / "daily_bars" / "historical_subset.parquet"
+        return tmp_path / "daily_bars" / "historical.parquet"
 
     monkeypatch.setattr(
-        "scripts.download_historical_prices_subset.build_historical_subset_from_files",
-        fake_build_historical_subset_from_files,
+        "scripts.download_historical_prices.build_historical_from_files",
+        fake_build_historical_from_files,
     )
 
-    exit_code = historical_prices_subset_main(
+    exit_code = historical_prices_main(
         [
             "--input-file",
             str(input_file),
@@ -1545,7 +1549,7 @@ def test_download_historical_prices_subset_cli_builds_from_input_file(tmp_path, 
     assert exit_code == 0
 
 
-def test_download_historical_prices_subset_cli_defaults_to_bulk_download(tmp_path, monkeypatch):
+def test_download_historical_prices_cli_defaults_to_bulk_download(tmp_path, monkeypatch):
     bulk_file = tmp_path / "bulk.parquet"
 
     def fake_request_bulk_price_files(raw_export_dir=None, poll_seconds=60.0, max_polls=30):
@@ -1554,21 +1558,21 @@ def test_download_historical_prices_subset_cli_defaults_to_bulk_download(tmp_pat
         assert max_polls == 1
         return [bulk_file]
 
-    def fake_build_historical_subset_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
+    def fake_build_historical_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=500_000):
         assert input_files == [bulk_file]
         assert output_dir == str(tmp_path / "daily_bars")
-        return tmp_path / "daily_bars" / "historical_subset.parquet"
+        return tmp_path / "daily_bars" / "historical.parquet"
 
     monkeypatch.setattr(
-        "scripts.download_historical_prices_subset.request_bulk_price_files",
+        "scripts.download_historical_prices.request_bulk_price_files",
         fake_request_bulk_price_files,
     )
     monkeypatch.setattr(
-        "scripts.download_historical_prices_subset.build_historical_subset_from_files",
-        fake_build_historical_subset_from_files,
+        "scripts.download_historical_prices.build_historical_from_files",
+        fake_build_historical_from_files,
     )
 
-    exit_code = historical_prices_subset_main(
+    exit_code = historical_prices_main(
         [
             "--output-dir",
             str(tmp_path / "daily_bars"),

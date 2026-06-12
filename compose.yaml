@@ -31,13 +31,13 @@ services:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ticker_universe.py"]
 
-  finbot-historical-prices-subset:
+  finbot-historical-prices:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices_subset.py"]
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices.py"]
 
   finbot-update-historical-prices:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_historical_prices_subset.py"]
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_historical_prices.py"]
 
   finbot-tickers:
     <<: *finbot-data-job
