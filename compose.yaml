@@ -12,7 +12,9 @@ x-finbot-data-job: &finbot-data-job
       FINBOT_REFERENCE_DIR: /data/reference
       FINBOT_RATIOS_DIR: /data/ratios
       FINBOT_FINANCIALS_DIR: /data/financials
+      FINBOT_FUNDAMENTALS_DIR: /data/fundamentals
       FINBOT_RAW_EXPORT_DIR: /data/raw/exports/daily_bars
+      FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR: /data/raw/exports/fundamentals/sf1
       FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
       FINBOT_FINANCIALS_HISTORY_YEARS: ${FINBOT_FINANCIALS_HISTORY_YEARS:-2}
       MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-0}
@@ -38,6 +40,14 @@ services:
   finbot-update-historical-prices:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_historical_prices.py"]
+
+  finbot-fundamentals:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_fundamentals.py"]
+
+  finbot-update-fundamentals:
+    <<: *finbot-data-job
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_fundamentals.py"]
 
   finbot-tickers:
     <<: *finbot-data-job

@@ -7,7 +7,7 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - This repo was split out from the main Finbot modeling repo.
 - Other finbot repos should own feature engineering, preprocessing, model training, and inference.
 - This repo should only download, normalize, and store market data.
-- Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices.
+- Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices, ticker reference metadata, and SF1 fundamentals.
 - Massive provider code remains as legacy migration context for older reference and fundamentals workflows.
 - Alpaca provider code may exist as migration context, but new work should not use Alpaca unless explicitly requested.
 - This is intentionally not an installable Python package right now. Do not add packaging metadata, console scripts, or a `src/` package layout unless the user asks to revisit that decision.
@@ -50,10 +50,17 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Daily price metadata uses a matching `historical.metadata.json` sidecar.
 - Initial daily price backfills download raw export files under `data/raw/exports/daily_bars`, or `FINBOT_DATA_ROOT/raw/exports/daily_bars` when `FINBOT_DATA_ROOT` is set.
 - Daily price updates use one paginated `lastupdated.gte` query across the SEP table, filter locally to `tickers.parquet`, and merge by `symbol,date`.
+- SF1 fundamentals are maintained as the canonical Finbot fundamentals dataset built from Nasdaq Data Link Sharadar SF1 table export files.
+- The filtered SF1 fundamentals output is `data/fundamentals/sf1.parquet`.
+- Initial SF1 backfills download raw export files under `data/raw/exports/fundamentals/sf1`, or `FINBOT_DATA_ROOT/raw/exports/fundamentals/sf1` when `FINBOT_DATA_ROOT` is set.
+- SF1 updates use one paginated `lastupdated.gte` query across the SF1 table, filter locally to `tickers.parquet`, and merge by `ticker,dimension,datekey,reportperiod`.
+- Keep all SF1 dimensions in one provider-normalized parquet at the data layer. Dimension-specific point-in-time feature views belong in `finbot-features`.
+- For later feature engineering, prefer AR dimensions for backtest-safe features: `ART` for trailing-twelve-month fundamentals, `ARQ` for quarterly change features, and `ARY` for annual context. Treat AR `datekey` as the information availability date. MR dimensions include restatements and are mainly for current/restated business analysis.
 - Do not create provider-specific dataset names; put provider/source fields in metadata JSON.
-- The full Sharadar ticker universe output is `data/reference/tickers_all.parquet`.
+- The full Sharadar ticker universe raw download is `data/raw/nasdaq_data_link/sharadar/tickers/tickers_sep_raw.jsonl`.
 - The ticker universe output is `data/reference/tickers.parquet`.
 - When `FINBOT_DATA_ROOT` is set, reference datasets default to `FINBOT_DATA_ROOT/reference`.
+- When `FINBOT_DATA_ROOT` is set, raw ticker downloads default to `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/tickers`.
 - The ticker universe metadata file is `data/reference/tickers.metadata.json`.
 - For duplicate `symbol,date` rows in daily bars, keep the newest downloaded row.
 - For Massive adjusted grouped bars, remember that adjusted volume may be fractional because Massive adjusts volume along with prices.

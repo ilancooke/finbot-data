@@ -17,6 +17,13 @@ from market_data.datasets.daily_prices import (
     update_historical,
 )
 from market_data.datasets.financials import download_financials_history, read_financial_statement
+from market_data.datasets.fundamentals import (
+    SF1_PARQUET_FILE,
+    build_sf1_from_files,
+    normalize_sf1_frame,
+    request_bulk_sf1_files,
+    update_sf1,
+)
 from market_data.datasets.ratios import download_ratios_snapshot, read_ratios
 from market_data.datasets.related_tickers import download_related_tickers_snapshot, read_related_tickers
 from market_data.datasets.ticker_universe import (
@@ -57,12 +64,14 @@ from market_data.universe import (
 )
 from scripts.download_daily_bars import main
 from scripts.download_financials import main as financials_main
+from scripts.download_fundamentals import main as fundamentals_main
 from scripts.download_historical_prices import main as historical_prices_main
 from scripts.download_ratios import main as ratios_main
 from scripts.download_related_tickers import main as related_tickers_main
 from scripts.download_ticker_universe import main as ticker_universe_main
 from scripts.download_ticker_details import main as ticker_details_main
 from scripts.download_tickers import main as tickers_main
+from scripts.update_fundamentals import main as update_fundamentals_main
 
 
 class FakeResponse:
@@ -1264,7 +1273,7 @@ def test_normalize_price_frame_uses_canonical_schema():
     assert normalized["lastupdated"].tolist() == [date(2026, 5, 11), date(2026, 5, 11)]
 
 
-def test_download_and_write_ticker_universe_writes_all_and_filtered(tmp_path, monkeypatch):
+def test_download_and_write_ticker_universe_writes_raw_and_filtered(tmp_path, monkeypatch):
     def fake_downloader(api_key):
         assert api_key == "test-key"
         return [
@@ -1293,16 +1302,25 @@ def test_download_and_write_ticker_universe_writes_all_and_filtered(tmp_path, mo
         ]
 
     monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
-    paths = download_and_write_ticker_universe(output_dir=tmp_path, downloader=fake_downloader)
-    tickers_all = pd.read_parquet(paths["tickers_all"])
+    raw_output_dir = tmp_path / "raw" / "nasdaq_data_link" / "sharadar" / "tickers"
+    paths = download_and_write_ticker_universe(
+        output_dir=tmp_path,
+        raw_output_dir=raw_output_dir,
+        downloader=fake_downloader,
+    )
+    raw_rows = [json.loads(line) for line in paths["tickers_raw"].read_text(encoding="utf-8").splitlines()]
+    raw_metadata = json.loads((raw_output_dir / "tickers_sep_raw.download.json").read_text(encoding="utf-8"))
     tickers = pd.read_parquet(paths["tickers"])
     metadata = json.loads((tmp_path / "tickers.metadata.json").read_text(encoding="utf-8"))
 
-    assert paths["tickers_all"] == tmp_path / "tickers_all.parquet"
-    assert tickers_all["ticker"].tolist() == ["AAPL", "ZZZ"]
+    assert paths["tickers_raw"] == raw_output_dir / "tickers_sep_raw.jsonl"
+    assert [row["ticker"] for row in raw_rows] == ["AAPL", "ZZZ"]
+    assert raw_metadata["raw_file"] == "tickers_sep_raw.jsonl"
+    assert raw_metadata["rows"] == 2
     assert tickers["ticker"].tolist() == ["AAPL"]
     assert metadata["provider"] == "sharadar"
     assert metadata["variant"] == "tickers"
+    assert metadata["raw_input_file"] == str(paths["tickers_raw"])
     assert metadata["filter"]["market_caps"] == ["4 - Mid", "5 - Large", "6 - Mega"]
 
 
@@ -1500,19 +1518,213 @@ def test_update_historical_merges_lastupdated_rows(tmp_path, monkeypatch):
     assert metadata["data_max_date"] == "2018-09-04"
 
 
-def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):
-    output_dir = tmp_path / "daily_bars"
+def test_normalize_sf1_frame_preserves_schema_and_dates():
+    normalized = normalize_sf1_frame(
+        pd.DataFrame(
+            [
+                {
+                    "ticker": "aapl",
+                    "dimension": "art",
+                    "calendardate": "2026-03-31",
+                    "datekey": "2026-05-01",
+                    "reportperiod": "2026-03-28",
+                    "fiscalperiod": "2026-Q2",
+                    "lastupdated": "2026-05-04",
+                    "revenue": "95359000000",
+                    "pe": "30.5",
+                }
+            ]
+        )
+    )
 
-    def fake_download_and_write_ticker_universe(output_dir=None, downloader=None):
+    assert normalized["ticker"].tolist() == ["AAPL"]
+    assert normalized["dimension"].tolist() == ["ART"]
+    assert normalized["datekey"].tolist() == [date(2026, 5, 1)]
+    assert normalized["reportperiod"].tolist() == [date(2026, 3, 28)]
+    assert normalized["revenue"].tolist() == [95359000000]
+    assert normalized["pe"].tolist() == [30.5]
+
+
+def test_build_sf1_from_files_filters_to_ticker_universe(tmp_path):
+    reference_dir = tmp_path / "reference"
+    output_dir = tmp_path / "fundamentals"
+    reference_dir.mkdir()
+    pd.DataFrame({"ticker": ["AAPL"]}).to_parquet(reference_dir / "tickers.parquet", index=False)
+    input_file = tmp_path / "sf1.csv"
+    input_file.write_text(
+        "\n".join(
+            [
+                "ticker,dimension,calendardate,datekey,reportperiod,fiscalperiod,lastupdated,revenue,assets,pe",
+                "MSFT,ART,2026-03-31,2026-04-30,2026-03-31,2026-Q3,2026-05-01,700,2000,25.0",
+                "AAPL,ART,2026-03-31,2026-05-01,2026-03-28,2026-Q2,2026-05-04,1000,3000,30.0",
+                "AAPL,MRQ,2026-03-31,2026-03-28,2026-03-28,2026-Q2,2026-05-04,250,3000,30.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_path = build_sf1_from_files([input_file], reference_dir=reference_dir, output_dir=output_dir, chunk_rows=1)
+    fundamentals = pd.read_parquet(output_path)
+    metadata = json.loads((output_dir / "sf1.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == output_dir / SF1_PARQUET_FILE
+    assert fundamentals["ticker"].tolist() == ["AAPL", "AAPL"]
+    assert fundamentals["dimension"].tolist() == ["ART", "MRQ"]
+    assert metadata["provider"] == "sharadar"
+    assert metadata["source_table"] == "SHARADAR/SF1"
+    assert metadata["input_tickers"] == 1
+    assert metadata["dimensions"] == ["ART", "MRQ"]
+    assert metadata["data_min_date"] == "2026-03-28"
+    assert metadata["data_max_date"] == "2026-05-01"
+    assert metadata["reportperiod_min_date"] == "2026-03-28"
+    assert metadata["reportperiod_max_date"] == "2026-03-28"
+
+
+def test_request_bulk_sf1_files_uses_table_export(tmp_path, monkeypatch):
+    monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
+
+    class FakeExportClient:
+        def __init__(self):
+            self.calls = 0
+            self.downloaded_url = None
+
+        def get_table_export(self, table_code):
+            self.calls += 1
+            assert table_code == "SHARADAR/SF1"
+            if self.calls == 1:
+                return {"datatable_bulk_download": {"file": {"status": "creating"}}}
+            return {
+                "datatable_bulk_download": {
+                    "file": {
+                        "status": "fresh",
+                        "link": "https://example.test/sf1.zip?token=abc",
+                        "data_snapshot_time": "2026-06-11T00:00:00Z",
+                    }
+                }
+            }
+
+        def download_file(self, url, output_path):
+            self.downloaded_url = url
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"zip-data")
+            return output_path
+
+    client = FakeExportClient()
+
+    paths = request_bulk_sf1_files(tmp_path, client=client, poll_seconds=0, max_polls=1)
+
+    assert paths == [tmp_path / "bulk_file_001.zip"]
+    assert paths[0].read_bytes() == b"zip-data"
+    assert client.calls == 2
+    assert client.downloaded_url == "https://example.test/sf1.zip?token=abc"
+
+
+def test_update_sf1_merges_lastupdated_rows_by_primary_key(tmp_path, monkeypatch):
+    reference_dir = tmp_path / "reference"
+    output_dir = tmp_path / "fundamentals"
+    reference_dir.mkdir()
+    output_dir.mkdir()
+    pd.DataFrame({"ticker": ["AAPL", "MSFT"]}).to_parquet(reference_dir / "tickers.parquet", index=False)
+    pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "dimension": ["ART"],
+            "calendardate": [date(2026, 3, 31)],
+            "datekey": [date(2026, 5, 1)],
+            "reportperiod": [date(2026, 3, 28)],
+            "fiscalperiod": ["2026-Q2"],
+            "lastupdated": [date(2026, 5, 3)],
+            "revenue": [900.0],
+            "assets": [3000.0],
+            "pe": [29.0],
+        }
+    ).to_parquet(output_dir / SF1_PARQUET_FILE, index=False)
+
+    calls = []
+
+    def fake_downloader(lastupdated_gte, api_key):
+        calls.append((lastupdated_gte, api_key))
+        assert lastupdated_gte == date(2026, 5, 4)
+        assert api_key == "test-key"
+        return [
+            {
+                "ticker": "AAPL",
+                "dimension": "ART",
+                "calendardate": "2026-03-31",
+                "datekey": "2026-05-01",
+                "reportperiod": "2026-03-28",
+                "fiscalperiod": "2026-Q2",
+                "lastupdated": "2026-05-04",
+                "revenue": 1000,
+                "assets": 3000,
+                "pe": 30.0,
+            },
+            {
+                "ticker": "MSFT",
+                "dimension": "MRQ",
+                "calendardate": "2026-03-31",
+                "datekey": "2026-03-31",
+                "reportperiod": "2026-03-31",
+                "fiscalperiod": "2026-Q3",
+                "lastupdated": "2026-05-04",
+                "revenue": 700,
+                "assets": 2000,
+                "pe": 25.0,
+            },
+            {
+                "ticker": "ZZZ",
+                "dimension": "ART",
+                "calendardate": "2026-03-31",
+                "datekey": "2026-05-01",
+                "reportperiod": "2026-03-31",
+                "fiscalperiod": "2026-Q1",
+                "lastupdated": "2026-05-04",
+                "revenue": 1,
+            },
+        ]
+
+    monkeypatch.setenv("NASDAQ_DATA_LINK_API_KEY", "test-key")
+    output_path = update_sf1(
+        lastupdated_gte=date(2026, 5, 4),
+        reference_dir=reference_dir,
+        output_dir=output_dir,
+        downloader=fake_downloader,
+    )
+    fundamentals = pd.read_parquet(output_path)
+    metadata = json.loads((output_dir / "sf1.metadata.json").read_text(encoding="utf-8"))
+
+    assert output_path == output_dir / SF1_PARQUET_FILE
+    assert calls == [(date(2026, 5, 4), "test-key")]
+    assert fundamentals[["ticker", "dimension"]].values.tolist() == [["AAPL", "ART"], ["MSFT", "MRQ"]]
+    assert fundamentals.loc[fundamentals["ticker"] == "AAPL", "revenue"].item() == 1000
+    assert metadata["variant"] == "sf1"
+    assert metadata["update_filter"] == "lastupdated.gte"
+    assert metadata["input_tickers"] == 2
+    assert metadata["update_raw_rows"] == 3
+    assert metadata["update_rows"] == 2
+    assert metadata["primary_key"] == ["ticker", "dimension", "datekey", "reportperiod"]
+
+
+def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):
+    def fake_download_and_write_ticker_universe(output_dir=None, raw_output_dir=None, downloader=None):
         assert output_dir == str(tmp_path / "reference")
-        return {"tickers_all": tmp_path / "tickers_all.parquet", "tickers": tmp_path / "tickers.parquet"}
+        assert raw_output_dir == str(tmp_path / "raw_tickers")
+        return {"tickers_raw": tmp_path / "tickers_sep_raw.jsonl", "tickers": tmp_path / "tickers.parquet"}
 
     monkeypatch.setattr(
         "scripts.download_ticker_universe.download_and_write_ticker_universe",
         fake_download_and_write_ticker_universe,
     )
 
-    exit_code = ticker_universe_main(["--output-dir", str(tmp_path / "reference")])
+    exit_code = ticker_universe_main(
+        [
+            "--output-dir",
+            str(tmp_path / "reference"),
+            "--raw-output-dir",
+            str(tmp_path / "raw_tickers"),
+        ]
+    )
 
     assert exit_code == 0
 
@@ -1580,6 +1792,98 @@ def test_download_historical_prices_cli_defaults_to_bulk_download(tmp_path, monk
             "0",
             "--max-polls",
             "1",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_download_fundamentals_cli_builds_from_input_file(tmp_path, monkeypatch):
+    input_file = tmp_path / "sf1.csv"
+    input_file.write_text("ticker,dimension,calendardate,datekey,reportperiod,lastupdated,revenue\n", encoding="utf-8")
+
+    def fake_build_sf1_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=100_000):
+        assert input_files == [input_file]
+        assert reference_dir == str(tmp_path / "reference")
+        assert output_dir == str(tmp_path / "fundamentals")
+        assert chunk_rows == 10
+        return tmp_path / "fundamentals" / "sf1.parquet"
+
+    monkeypatch.setattr(
+        "scripts.download_fundamentals.build_sf1_from_files",
+        fake_build_sf1_from_files,
+    )
+
+    exit_code = fundamentals_main(
+        [
+            "--input-file",
+            str(input_file),
+            "--reference-dir",
+            str(tmp_path / "reference"),
+            "--output-dir",
+            str(tmp_path / "fundamentals"),
+            "--chunk-rows",
+            "10",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_download_fundamentals_cli_defaults_to_bulk_download(tmp_path, monkeypatch):
+    bulk_file = tmp_path / "sf1-bulk.parquet"
+
+    def fake_request_bulk_sf1_files(raw_export_dir=None, poll_seconds=60.0, max_polls=30):
+        assert raw_export_dir is None
+        assert poll_seconds == 0
+        assert max_polls == 1
+        return [bulk_file]
+
+    def fake_build_sf1_from_files(input_files, reference_dir=None, output_dir=None, chunk_rows=100_000):
+        assert input_files == [bulk_file]
+        assert output_dir == str(tmp_path / "fundamentals")
+        return tmp_path / "fundamentals" / "sf1.parquet"
+
+    monkeypatch.setattr(
+        "scripts.download_fundamentals.request_bulk_sf1_files",
+        fake_request_bulk_sf1_files,
+    )
+    monkeypatch.setattr(
+        "scripts.download_fundamentals.build_sf1_from_files",
+        fake_build_sf1_from_files,
+    )
+
+    exit_code = fundamentals_main(
+        [
+            "--output-dir",
+            str(tmp_path / "fundamentals"),
+            "--poll-seconds",
+            "0",
+            "--max-polls",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_update_fundamentals_cli_updates_sf1(tmp_path, monkeypatch):
+    def fake_update_sf1(lastupdated_gte, reference_dir=None, output_dir=None):
+        assert lastupdated_gte == date(2026, 5, 4)
+        assert reference_dir == str(tmp_path / "reference")
+        assert output_dir == str(tmp_path / "fundamentals")
+        return tmp_path / "fundamentals" / "sf1.parquet"
+
+    monkeypatch.setattr("scripts.update_fundamentals.update_sf1", fake_update_sf1)
+
+    exit_code = update_fundamentals_main(
+        [
+            "--lastupdated-gte",
+            "2026-05-04",
+            "--reference-dir",
+            str(tmp_path / "reference"),
+            "--output-dir",
+            str(tmp_path / "fundamentals"),
         ]
     )
 

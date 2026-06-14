@@ -15,9 +15,10 @@ PROVIDER = "sharadar"
 SOURCE = "nasdaq_data_link"
 TICKERS_TABLE = "SHARADAR/TICKERS"
 DEFAULT_REFERENCE_DIR = Path("data/reference")
+DEFAULT_RAW_TICKERS_DIR = Path("data/raw/nasdaq_data_link/sharadar/tickers")
 
-TICKERS_ALL_PARQUET_FILE = "tickers_all.parquet"
-TICKERS_ALL_METADATA_FILE = "tickers_all.metadata.json"
+RAW_TICKERS_JSONL_FILE = "tickers_sep_raw.jsonl"
+RAW_TICKERS_METADATA_FILE = "tickers_sep_raw.download.json"
 TICKERS_PARQUET_FILE = "tickers.parquet"
 TICKERS_METADATA_FILE = "tickers.metadata.json"
 
@@ -65,6 +66,15 @@ def resolve_reference_dir(reference_dir: str | Path | None) -> Path:
         env_key="FINBOT_REFERENCE_DIR",
         default_path=DEFAULT_REFERENCE_DIR,
         data_root_subpath="reference",
+    )
+
+
+def resolve_raw_tickers_dir(raw_tickers_dir: str | Path | None) -> Path:
+    return resolve_finbot_data_path(
+        raw_tickers_dir,
+        env_key="FINBOT_RAW_TICKERS_DIR",
+        default_path=DEFAULT_RAW_TICKERS_DIR,
+        data_root_subpath="raw/nasdaq_data_link/sharadar/tickers",
     )
 
 
@@ -121,6 +131,7 @@ def filter_tickers(
 
 def download_and_write_ticker_universe(
     output_dir: str | Path | None = None,
+    raw_output_dir: str | Path | None = None,
     downloader: TickersDownloader | None = None,
 ) -> dict[str, Path]:
     api_key = get_nasdaq_data_link_api_key()
@@ -129,15 +140,9 @@ def download_and_write_ticker_universe(
     tickers_all = normalize_tickers_frame(pd.DataFrame(rows))
     tickers = filter_tickers(tickers_all)
     resolved_output_dir = resolve_reference_dir(output_dir)
+    resolved_raw_output_dir = resolve_raw_tickers_dir(raw_output_dir)
 
-    all_path = write_tickers_snapshot(
-        tickers_all,
-        resolved_output_dir,
-        parquet_name=TICKERS_ALL_PARQUET_FILE,
-        metadata_name=TICKERS_ALL_METADATA_FILE,
-        variant="tickers_all",
-        metadata_extra={"raw_rows": len(rows)},
-    )
+    raw_path = write_raw_tickers_snapshot(rows, resolved_raw_output_dir)
     subset_path = write_tickers_snapshot(
         tickers,
         resolved_output_dir,
@@ -145,7 +150,7 @@ def download_and_write_ticker_universe(
         metadata_name=TICKERS_METADATA_FILE,
         variant="tickers",
         metadata_extra={
-            "input_file": TICKERS_ALL_PARQUET_FILE,
+            "raw_input_file": str(raw_path),
             "input_rows": len(tickers_all),
             "filter": {
                 "active_only": True,
@@ -155,7 +160,49 @@ def download_and_write_ticker_universe(
             },
         },
     )
-    return {"tickers_all": all_path, "tickers": subset_path}
+    return {"tickers_raw": raw_path, "tickers": subset_path}
+
+
+def write_raw_tickers_snapshot(rows: list[dict[str, Any]], output_dir: str | Path) -> Path:
+    """Atomically write raw Sharadar ticker rows as JSONL plus download metadata."""
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / RAW_TICKERS_JSONL_FILE
+    metadata_path = output_dir / RAW_TICKERS_METADATA_FILE
+
+    collected_at_utc = datetime.utcnow()
+    metadata = {
+        "collected_date_utc": collected_at_utc.date().isoformat(),
+        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        "provider": PROVIDER,
+        "source": SOURCE,
+        "source_table": TICKERS_TABLE,
+        "dataset": "tickers",
+        "variant": "tickers_raw",
+        "mode": "replace",
+        "rows": int(len(rows)),
+        "api_params": {"table": "SEP"},
+        "raw_file": output_path.name,
+    }
+
+    with tempfile.NamedTemporaryFile(dir=output_dir, suffix=".jsonl", mode="w", encoding="utf-8", delete=False) as temp_raw:
+        temp_raw_path = Path(temp_raw.name)
+        for row in rows:
+            temp_raw.write(json.dumps(row, sort_keys=True))
+            temp_raw.write("\n")
+    with tempfile.NamedTemporaryFile(dir=output_dir, suffix=".json", mode="w", encoding="utf-8", delete=False) as temp_metadata:
+        temp_metadata_path = Path(temp_metadata.name)
+        json.dump(metadata, temp_metadata, indent=2)
+
+    try:
+        temp_raw_path.replace(output_path)
+        temp_metadata_path.replace(metadata_path)
+    finally:
+        temp_raw_path.unlink(missing_ok=True)
+        temp_metadata_path.unlink(missing_ok=True)
+
+    return output_path
 
 
 def write_tickers_snapshot(

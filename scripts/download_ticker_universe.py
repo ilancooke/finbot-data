@@ -29,7 +29,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help=f"Output directory for tickers_all.parquet and tickers.parquet. Default: {DEFAULT_REFERENCE_DIR}",
+        help=f"Output directory for filtered tickers.parquet. Default: {DEFAULT_REFERENCE_DIR}",
+    )
+    parser.add_argument(
+        "--raw-output-dir",
+        default=None,
+        help="Output directory for raw Sharadar ticker JSONL. Default: FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/tickers or data/raw/nasdaq_data_link/sharadar/tickers",
     )
     return parser.parse_args(argv)
 
@@ -39,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     started = time.perf_counter()
     try:
-        paths = download_and_write_ticker_universe(output_dir=args.output_dir)
+        paths = download_and_write_ticker_universe(output_dir=args.output_dir, raw_output_dir=args.raw_output_dir)
         logger.info("Ticker universe download succeeded paths=%s total_time=%.3fs", paths, time.perf_counter() - started)
         return 0
     except Exception:

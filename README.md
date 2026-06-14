@@ -4,7 +4,7 @@ Plain-script market data downloader for Finbot.
 
 This repository only downloads, normalizes, and stores market data. Feature engineering, preprocessing, model training, inference, and dashboard code live elsewhere.
 
-Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices. Massive scripts still exist as legacy migration context for older reference and fundamentals workflows.
+Finbot uses Sharadar via Nasdaq Data Link as the canonical source for daily prices, ticker reference metadata, and SF1 fundamentals. Massive scripts still exist as legacy migration context for older reference and fundamentals workflows.
 
 ## Setup
 
@@ -30,7 +30,7 @@ Dependencies are intentionally limited to the active downloader and its tests:
 - `market_data/providers/`: provider API clients such as Nasdaq Data Link and legacy Massive.
 - `market_data/http.py`: legacy Massive HTTP, pagination, retry, and sanitized error handling.
 - `market_data/universe.py`: ticker universe fetching, filtering, and parquet helpers for per-symbol jobs.
-- `market_data/storage.py`: shared parquet and metadata writing.
+- `market_data/storage.py`: legacy shared parquet and metadata writing for daily bars.
 - `market_data/config.py`: environment and `.env` helpers.
 - `tests/`: local test suite.
 
@@ -50,10 +50,13 @@ python scripts/download_ticker_universe.py
 
 This writes:
 
-- `FINBOT_DATA_ROOT/reference/tickers_all.parquet`
-- `FINBOT_DATA_ROOT/reference/tickers_all.metadata.json`
+- `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/tickers/tickers_sep_raw.jsonl`
+- `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/tickers/tickers_sep_raw.download.json`
 - `FINBOT_DATA_ROOT/reference/tickers.parquet`
 - `FINBOT_DATA_ROOT/reference/tickers.metadata.json`
+
+The raw JSONL file preserves the unfiltered provider rows for audit/debug/reprocessing. The
+reference directory contains only the filtered ticker universe consumed by downstream jobs.
 
 The filtered `tickers.parquet` currently keeps active domestic mid, large, and mega cap common stocks on `NASDAQ`, `NYSE`, or `NYSEMKT`.
 
@@ -102,6 +105,71 @@ The price datasets use this schema:
 | `lastupdated` | date | Provider row update date |
 
 Metadata records include `provider=sharadar`, `source=nasdaq_data_link`, source table, variant, row counts, ticker counts, and data date bounds. Initial backfill metadata also records input files; daily update metadata records update filters and row counts.
+
+## Fundamentals Workflow
+
+Finbot uses Sharadar SF1 via Nasdaq Data Link as the canonical source for fundamentals. The
+SF1 workflow preserves all six Sharadar dimensions in one parquet dataset:
+
+- `ARQ`, `ART`, `ARY`: as-reported quarterly, trailing-twelve-month, and annual data.
+- `MRQ`, `MRT`, `MRY`: most-recent reported quarterly, trailing-twelve-month, and annual data.
+
+As-reported dimensions are point-in-time oriented and should be the default input for later
+backtest-safe feature generation. Most-recent reported dimensions include restatements and are
+kept for current/restated business analysis. Feature generation belongs in `finbot-features`;
+this repository only downloads, filters, normalizes, and stores the data.
+
+Download a Nasdaq Data Link table export and build the SF1 fundamentals dataset:
+
+```bash
+FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
+NASDAQ_DATA_LINK_API_KEY=... \
+python scripts/download_fundamentals.py
+```
+
+This downloads the provider table export zip under
+`FINBOT_DATA_ROOT/raw/exports/fundamentals/sf1`, streams through it in chunks, filters to
+`reference/tickers.parquet`, and writes:
+
+- `FINBOT_DATA_ROOT/fundamentals/sf1.parquet`
+- `FINBOT_DATA_ROOT/fundamentals/sf1.metadata.json`
+
+If you already have an export file, you can convert it directly instead:
+
+```bash
+FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
+python scripts/download_fundamentals.py \
+  --input-file /path/to/SHARADAR_SF1.zip
+```
+
+Incremental SF1 updates use one paginated `lastupdated` filter across the SF1 table, filter
+locally to `reference/tickers.parquet`, and merge changed rows:
+
+```bash
+FINBOT_DATA_ROOT=/Users/ilan/workspace/finbot/data \
+NASDAQ_DATA_LINK_API_KEY=... \
+python scripts/update_fundamentals.py --lastupdated-gte 2026-06-11
+```
+
+SF1 records are merged by Sharadar's primary key:
+
+- `ticker`
+- `dimension`
+- `datekey`
+- `reportperiod`
+
+The SF1 dataset keeps Sharadar's full 112-column schema. Metadata records include the source
+table, primary key, dimensions present, row counts, ticker counts, datekey bounds, report-period
+bounds, input files, ticker-universe path, and update filters when applicable.
+
+Downstream feature packages should treat `fundamentals/sf1.parquet` as a provider-normalized
+input table, not as a finished feature dataset. For point-in-time alpha research and backtests,
+use the as-reported dimensions first: `ART` for trailing-twelve-month fundamentals, `ARQ` for
+quarterly changes, and `ARY` for annual context. In those dimensions, `datekey` is the SEC filing
+date and should be treated as the information availability date; features should become usable no
+earlier than the next trading day after `datekey`. The `MRQ`, `MRT`, and `MRY` dimensions include
+restatements and are useful for current/restated business analysis, but should not be the default
+for historical backtest features.
 
 ## Legacy Massive Daily Bars
 
@@ -308,14 +376,17 @@ MASSIVE_API_KEY=...
 
 Supported Finbot environment variables:
 
-- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, ratios default to `FINBOT_DATA_ROOT/ratios`, and financial statements default to `FINBOT_DATA_ROOT/financials`.
+- `FINBOT_DATA_ROOT`: shared Finbot data root. When set, daily bars default to `FINBOT_DATA_ROOT/market/daily_bars`, reference datasets default to `FINBOT_DATA_ROOT/reference`, fundamentals default to `FINBOT_DATA_ROOT/fundamentals`, ratios default to `FINBOT_DATA_ROOT/ratios`, and financial statements default to `FINBOT_DATA_ROOT/financials`.
 - `FINBOT_RAW_BARS_DIR`: output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_REFERENCE_DIR`: filtered ticker universe output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_RAW_TICKERS_DIR`: raw Sharadar ticker JSONL output directory fallback when `--raw-output-dir` is not supplied.
 - `FINBOT_TICKER_UNIVERSE`: default ticker universe strategy. Defaults to `sp500`; set to `all_common_stocks` to disable the known-universe CSV filter.
 - `FINBOT_KNOWN_UNIVERSE_FILE`: CSV file containing a `Symbol` or `Ticker` column for the selected known universe.
 - `FINBOT_RATIOS_DIR`: ratios output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_FINANCIALS_DIR`: financial statements output directory fallback when `--output-dir` is not supplied.
 - `FINBOT_RAW_EXPORT_DIR`: raw downloaded daily price export file directory fallback when `--raw-export-dir` is not supplied.
+- `FINBOT_FUNDAMENTALS_DIR`: SF1 fundamentals output directory fallback when `--output-dir` is not supplied.
+- `FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR`: raw downloaded SF1 export file directory fallback when `--raw-export-dir` is not supplied.
 - `FINBOT_INGEST_DISABLE_NETWORK`: set to `1`, `true`, or `yes` to skip network calls and write an empty snapshot for smoke tests.
 - `FINBOT_HISTORY_YEARS`: default history window for `--end-date` mode. Defaults to `2`.
 - `FINBOT_FINANCIALS_HISTORY_YEARS`: default financial statements history window. Defaults to `FINBOT_HISTORY_YEARS`, then `2`.
@@ -376,7 +447,10 @@ Daily update metadata also includes:
 - `ticker_universe_file`
 - `input_tickers`
 
-Current Sharadar-backed ticker universe files, `tickers_all.parquet` and `tickers.parquet`, use the normalized `SHARADAR/TICKERS` schema:
+The raw Sharadar-backed ticker universe download is written as JSONL at
+`raw/nasdaq_data_link/sharadar/tickers/tickers_sep_raw.jsonl`, with a download metadata file
+named `tickers_sep_raw.download.json`. The filtered `tickers.parquet` reference dataset uses
+the normalized `SHARADAR/TICKERS` schema:
 
 | Column | Type | Description |
 | --- | --- | --- |
@@ -409,7 +483,7 @@ Current Sharadar-backed ticker universe files, `tickers_all.parquet` and `ticker
 | `secfilings` | string | SEC filings URL or indicator when available |
 | `companysite` | string | Company website when available |
 
-`tickers_all.metadata.json` and `tickers.metadata.json` always include:
+`tickers.metadata.json` always includes:
 
 - `collected_date_utc`
 - `collected_at_utc`
@@ -425,9 +499,13 @@ Current Sharadar-backed ticker universe files, `tickers_all.parquet` and `ticker
 
 The filtered `tickers.metadata.json` also includes:
 
-- `input_file`
+- `raw_input_file`
 - `input_rows`
 - `filter`
+
+`tickers_sep_raw.download.json` records the raw file name, provider/source table, request
+parameters, row count, and collection timestamp. It is intentionally not named
+`*.metadata.json` because raw JSONL downloads are not cataloged parquet datasets.
 
 Legacy Massive `historical.parquet`, written by `scripts/download_daily_bars.py`, uses this older daily bar schema:
 
@@ -694,7 +772,7 @@ Build the local image:
 docker compose build
 ```
 
-Compose reads `.env` for credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. Daily price datasets write to `/data/market/daily_bars`, reference datasets write to `/data/reference`, raw export files write to `/data/raw/exports/daily_bars`, ratios write to `/data/ratios`, and financials write to `/data/financials`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
+Compose reads `.env` for credentials and mounts `${FINBOT_HOST_DATA_ROOT:-./data}` to `/data` in the container, so output files persist on the host. Daily price datasets write to `/data/market/daily_bars`, reference datasets write to `/data/reference`, SF1 fundamentals write to `/data/fundamentals`, raw ticker JSONL writes to `/data/raw/nasdaq_data_link/sharadar/tickers`, raw daily price export files write to `/data/raw/exports/daily_bars`, raw SF1 export files write to `/data/raw/exports/fundamentals/sf1`, ratios write to `/data/ratios`, and financials write to `/data/financials`. Set `FINBOT_HOST_DATA_ROOT=/srv/finbot/data` on the VM, or a local development path on your workstation, to keep downloaded data outside the repository clone.
 
 The Docker entrypoint creates the output directories, fixes ownership, then runs the job as `${HOST_UID:-1000}:${HOST_GID:-1000}` so files written to the mounted data root are owned by the host user instead of root. Set `HOST_UID` and `HOST_GID` in `.env` if your machine does not use `1000:1000`; use `id -u` and `id -g` to find the values.
 
@@ -720,6 +798,18 @@ Show incremental historical update help:
 
 ```bash
 docker compose run --rm finbot-update-historical-prices --help
+```
+
+Show SF1 fundamentals download/build help:
+
+```bash
+docker compose run --rm finbot-fundamentals --help
+```
+
+Show incremental SF1 fundamentals update help:
+
+```bash
+docker compose run --rm finbot-update-fundamentals --help
 ```
 
 Show legacy Massive ticker universe help:
@@ -784,6 +874,19 @@ Run an incremental daily price update:
 ```bash
 docker compose run --rm \
   finbot-update-historical-prices --lastupdated-gte 2026-06-11
+```
+
+Download/build the canonical SF1 fundamentals from Nasdaq Data Link:
+
+```bash
+docker compose run --rm finbot-fundamentals
+```
+
+Run an incremental SF1 fundamentals update:
+
+```bash
+docker compose run --rm \
+  finbot-update-fundamentals --lastupdated-gte 2026-06-11
 ```
 
 Legacy Massive ticker universe from the container:
