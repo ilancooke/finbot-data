@@ -3,30 +3,22 @@ x-finbot-data-job: &finbot-data-job
     image: finbot-data:local
     environment:
       NASDAQ_DATA_LINK_API_KEY: ${NASDAQ_DATA_LINK_API_KEY:-}
-      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
-      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       HOST_UID: ${HOST_UID:-1000}
       HOST_GID: ${HOST_GID:-1000}
       FINBOT_DATA_ROOT: /data
       FINBOT_RAW_BARS_DIR: /data/market/daily_bars
       FINBOT_REFERENCE_DIR: /data/reference
-      FINBOT_RATIOS_DIR: /data/ratios
-      FINBOT_FINANCIALS_DIR: /data/financials
       FINBOT_FUNDAMENTALS_DIR: /data/fundamentals
       FINBOT_RAW_EXPORT_DIR: /data/raw/exports/daily_bars
       FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR: /data/raw/exports/fundamentals/sf1
-      FINBOT_HISTORY_YEARS: ${FINBOT_HISTORY_YEARS:-2}
-      FINBOT_FINANCIALS_HISTORY_YEARS: ${FINBOT_FINANCIALS_HISTORY_YEARS:-2}
-      MASSIVE_CALLS_PER_MINUTE: ${MASSIVE_CALLS_PER_MINUTE:-0}
-      MASSIVE_RATIOS_CALLS_PER_MINUTE: ${MASSIVE_RATIOS_CALLS_PER_MINUTE:-0}
-      MASSIVE_FINANCIALS_CALLS_PER_MINUTE: ${MASSIVE_FINANCIALS_CALLS_PER_MINUTE:-0}
+      FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR: /data/raw/exports/fundamentals/daily_valuation_metrics
     volumes:
       - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
 
 services:
   finbot-data:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_daily_bars.py"]
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices.py"]
     command: ["--help"]
 
   finbot-ticker-universe:
@@ -49,22 +41,10 @@ services:
     <<: *finbot-data-job
     entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_fundamentals.py"]
 
-  finbot-tickers:
+  finbot-daily-valuation-metrics:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_tickers.py"]
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_daily_valuation_metrics.py"]
 
-  finbot-ticker-details:
+  finbot-update-daily-valuation-metrics:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ticker_details.py"]
-
-  finbot-related-tickers:
-    <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_related_tickers.py"]
-
-  finbot-ratios:
-    <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ratios.py"]
-
-  finbot-financials:
-    <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_financials.py"]
+    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_daily_valuation_metrics.py"]

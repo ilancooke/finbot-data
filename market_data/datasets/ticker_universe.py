@@ -85,7 +85,7 @@ def get_nasdaq_data_link_api_key() -> str:
     return api_key
 
 
-def download_tickers_all_rows(api_key: str, client: NasdaqDataLinkClient | None = None) -> list[dict[str, Any]]:
+def download_ticker_universe_all_rows(api_key: str, client: NasdaqDataLinkClient | None = None) -> list[dict[str, Any]]:
     client = client or NasdaqDataLinkClient(api_key=api_key)
     return client.get_table(TICKERS_TABLE, params={"table": "SEP"})
 
@@ -135,7 +135,7 @@ def download_and_write_ticker_universe(
     downloader: TickersDownloader | None = None,
 ) -> dict[str, Path]:
     api_key = get_nasdaq_data_link_api_key()
-    fetch = downloader or download_tickers_all_rows
+    fetch = downloader or download_ticker_universe_all_rows
     rows = fetch(api_key)
     tickers_all = normalize_tickers_frame(pd.DataFrame(rows))
     tickers = filter_tickers(tickers_all)
