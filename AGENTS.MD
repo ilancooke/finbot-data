@@ -42,15 +42,15 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - The filtered daily price output is `data/daily_bars/historical.parquet`.
 - When `FINBOT_DATA_ROOT` is set, daily prices default to `FINBOT_DATA_ROOT/market/daily_bars`.
 - Daily price metadata uses a matching `historical.metadata.json` sidecar.
-- Initial daily price backfills download raw export files under `data/raw/exports/daily_bars`, or `FINBOT_DATA_ROOT/raw/exports/daily_bars` when `FINBOT_DATA_ROOT` is set.
+- Initial daily price backfills download raw export files under `data/raw/nasdaq_data_link/sharadar/sep`, or `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/sep` when `FINBOT_DATA_ROOT` is set.
 - Daily price updates use one paginated `lastupdated.gte` query across the SEP table, filter locally to `tickers.parquet`, and merge by `symbol,date`.
 - SF1 fundamentals are maintained as the canonical Finbot fundamentals dataset built from Nasdaq Data Link Sharadar SF1 table export files.
 - The filtered SF1 fundamentals output is `data/fundamentals/sf1.parquet`.
-- Initial SF1 backfills download raw export files under `data/raw/exports/fundamentals/sf1`, or `FINBOT_DATA_ROOT/raw/exports/fundamentals/sf1` when `FINBOT_DATA_ROOT` is set.
+- Initial SF1 backfills download raw export files under `data/raw/nasdaq_data_link/sharadar/sf1`, or `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/sf1` when `FINBOT_DATA_ROOT` is set.
 - SF1 updates use one paginated `lastupdated.gte` query across the SF1 table, filter locally to `tickers.parquet`, and merge by `ticker,dimension,datekey,reportperiod`.
 - Daily valuation metrics are maintained from the Nasdaq Data Link Sharadar DAILY table.
 - The filtered daily valuation metrics output is `data/fundamentals/daily_valuation_metrics.parquet`.
-- Initial DAILY backfills download raw export files under `data/raw/exports/fundamentals/daily_valuation_metrics`, or `FINBOT_DATA_ROOT/raw/exports/fundamentals/daily_valuation_metrics` when `FINBOT_DATA_ROOT` is set.
+- Initial DAILY backfills download raw export files under `data/raw/nasdaq_data_link/sharadar/daily`, or `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/daily` when `FINBOT_DATA_ROOT` is set.
 - DAILY updates use one paginated `lastupdated.gte` query across the DAILY table, filter locally to `tickers.parquet`, and merge by `ticker,date`.
 - Keep all SF1 dimensions in one provider-normalized parquet at the data layer. Dimension-specific point-in-time feature views belong in `finbot-features`.
 - For later feature engineering, prefer AR dimensions for backtest-safe features: `ART` for trailing-twelve-month fundamentals, `ARQ` for quarterly change features, and `ARY` for annual context. Treat AR `datekey` as the information availability date. MR dimensions include restatements and are mainly for current/restated business analysis.

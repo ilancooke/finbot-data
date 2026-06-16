@@ -67,7 +67,7 @@ NASDAQ_DATA_LINK_API_KEY=... \
 python scripts/download_historical_prices.py
 ```
 
-This downloads the provider table export zip under `FINBOT_DATA_ROOT/raw/exports/daily_bars`,
+This downloads the provider table export zip under `FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/sep`,
 streams through it in chunks, filters to `reference/tickers.parquet`, and writes:
 
 - `FINBOT_DATA_ROOT/market/daily_bars/historical.parquet`
@@ -101,7 +101,7 @@ python scripts/download_fundamentals.py
 ```
 
 This downloads the provider table export zip under
-`FINBOT_DATA_ROOT/raw/exports/fundamentals/sf1`, streams through it in chunks, filters to
+`FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/sf1`, streams through it in chunks, filters to
 `reference/tickers.parquet`, and writes:
 
 - `FINBOT_DATA_ROOT/fundamentals/sf1.parquet`
@@ -149,7 +149,7 @@ python scripts/download_daily_valuation_metrics.py
 ```
 
 This downloads the provider table export zip under
-`FINBOT_DATA_ROOT/raw/exports/fundamentals/daily_valuation_metrics`, streams through it in chunks,
+`FINBOT_DATA_ROOT/raw/nasdaq_data_link/sharadar/daily`, streams through it in chunks,
 filters to `reference/tickers.parquet`, and writes:
 
 - `FINBOT_DATA_ROOT/fundamentals/daily_valuation_metrics.parquet`

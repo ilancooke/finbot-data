@@ -24,7 +24,7 @@ SEP_TABLE = "SHARADAR/SEP"
 
 DEFAULT_OUTPUT_DIR = Path("data/daily_bars")
 DEFAULT_REFERENCE_DIR = Path("data/reference")
-DEFAULT_RAW_EXPORT_DIR = Path("data/raw/exports/daily_bars")
+DEFAULT_RAW_EXPORT_DIR = Path("data/raw/nasdaq_data_link/sharadar/sep")
 DEFAULT_CSV_CHUNK_ROWS = 500_000
 
 HISTORICAL_PARQUET_FILE = "historical.parquet"
@@ -59,7 +59,7 @@ def resolve_raw_export_dir(raw_export_dir: str | Path | None) -> Path:
         raw_export_dir,
         env_key="FINBOT_RAW_EXPORT_DIR",
         default_path=DEFAULT_RAW_EXPORT_DIR,
-        data_root_subpath=Path("raw/exports/daily_bars"),
+        data_root_subpath=Path("raw/nasdaq_data_link/sharadar/sep"),
     )
 
 

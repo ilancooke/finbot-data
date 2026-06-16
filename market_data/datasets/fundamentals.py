@@ -24,7 +24,7 @@ SF1_TABLE = "SHARADAR/SF1"
 
 DEFAULT_OUTPUT_DIR = Path("data/fundamentals")
 DEFAULT_REFERENCE_DIR = Path("data/reference")
-DEFAULT_RAW_EXPORT_DIR = Path("data/raw/exports/fundamentals/sf1")
+DEFAULT_RAW_EXPORT_DIR = Path("data/raw/nasdaq_data_link/sharadar/sf1")
 DEFAULT_CSV_CHUNK_ROWS = 100_000
 
 SF1_PARQUET_FILE = "sf1.parquet"
@@ -174,7 +174,7 @@ def resolve_raw_export_dir(raw_export_dir: str | Path | None) -> Path:
         raw_export_dir,
         env_key="FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR",
         default_path=DEFAULT_RAW_EXPORT_DIR,
-        data_root_subpath="raw/exports/fundamentals/sf1",
+        data_root_subpath="raw/nasdaq_data_link/sharadar/sf1",
     )
 
 

@@ -24,7 +24,7 @@ DAILY_TABLE = "SHARADAR/DAILY"
 
 DEFAULT_OUTPUT_DIR = Path("data/fundamentals")
 DEFAULT_REFERENCE_DIR = Path("data/reference")
-DEFAULT_RAW_EXPORT_DIR = Path("data/raw/exports/fundamentals/daily_valuation_metrics")
+DEFAULT_RAW_EXPORT_DIR = Path("data/raw/nasdaq_data_link/sharadar/daily")
 DEFAULT_CSV_CHUNK_ROWS = 500_000
 
 DAILY_VALUATION_METRICS_PARQUET_FILE = "daily_valuation_metrics.parquet"
@@ -72,7 +72,7 @@ def resolve_raw_export_dir(raw_export_dir: str | Path | None) -> Path:
         raw_export_dir,
         env_key="FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR",
         default_path=DEFAULT_RAW_EXPORT_DIR,
-        data_root_subpath="raw/exports/fundamentals/daily_valuation_metrics",
+        data_root_subpath="raw/nasdaq_data_link/sharadar/daily",
     )
 
 

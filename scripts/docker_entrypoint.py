@@ -27,9 +27,9 @@ def _output_dirs() -> list[Path]:
         Path(os.getenv("FINBOT_RAW_BARS_DIR", str(data_root / "market/daily_bars"))),
         Path(os.getenv("FINBOT_REFERENCE_DIR", str(data_root / "reference"))),
         Path(os.getenv("FINBOT_FUNDAMENTALS_DIR", str(data_root / "fundamentals"))),
-        Path(os.getenv("FINBOT_RAW_EXPORT_DIR", str(data_root / "raw/exports/daily_bars"))),
-        Path(os.getenv("FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR", str(data_root / "raw/exports/fundamentals/sf1"))),
-        Path(os.getenv("FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR", str(data_root / "raw/exports/fundamentals/daily_valuation_metrics"))),
+        Path(os.getenv("FINBOT_RAW_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/sep"))),
+        Path(os.getenv("FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/sf1"))),
+        Path(os.getenv("FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/daily"))),
     ]
 
 

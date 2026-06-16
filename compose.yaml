@@ -9,9 +9,9 @@ x-finbot-data-job: &finbot-data-job
       FINBOT_RAW_BARS_DIR: /data/market/daily_bars
       FINBOT_REFERENCE_DIR: /data/reference
       FINBOT_FUNDAMENTALS_DIR: /data/fundamentals
-      FINBOT_RAW_EXPORT_DIR: /data/raw/exports/daily_bars
-      FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR: /data/raw/exports/fundamentals/sf1
-      FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR: /data/raw/exports/fundamentals/daily_valuation_metrics
+      FINBOT_RAW_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/sep
+      FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/sf1
+      FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/daily
     volumes:
       - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
 
