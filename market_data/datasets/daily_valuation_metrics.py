@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 import json
 import logging
 from pathlib import Path
@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from market_data.config import get_env, resolve_finbot_data_path
+from market_data.metadata import dataset_identity_metadata, frame_state_metadata, utc_timestamp_metadata
 from market_data.providers.nasdaq_data_link import NasdaqDataLinkClient
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ DEFAULT_CSV_CHUNK_ROWS = 500_000
 
 DAILY_VALUATION_METRICS_PARQUET_FILE = "daily_valuation_metrics.parquet"
 DAILY_VALUATION_METRICS_METADATA_FILE = "daily_valuation_metrics.metadata.json"
+DAILY_VALUATION_METRICS_DATASET_NAME = "fundamentals.daily_valuation_metrics"
+DAILY_VALUATION_METRICS_DATASET_GROUP = "fundamentals"
+DAILY_VALUATION_METRICS_WRITE_MODE = "incremental_merge"
+DAILY_VALUATION_METRICS_COMPLETENESS_PROFILE = "daily_ticker_metrics"
 
 DAILY_VALUATION_METRICS_PRIMARY_KEY = ["ticker", "date"]
 DAILY_VALUATION_METRICS_DATE_COLUMNS = ["date", "lastupdated"]
@@ -156,7 +161,6 @@ def build_daily_valuation_metrics_from_files(
     writer: pq.ParquetWriter | None = None
     rows = 0
     tickers: set[str] = set()
-    dates: list[date] = []
 
     try:
         for frame in _iter_daily_valuation_metric_frames(input_paths, chunk_rows=chunk_rows):
@@ -169,11 +173,6 @@ def build_daily_valuation_metrics_from_files(
                 continue
             rows += len(filtered)
             tickers.update(filtered["ticker"].dropna().astype(str).unique().tolist())
-            chunk_min, chunk_max = _date_range(filtered, "date")
-            if chunk_min is not None:
-                dates.append(chunk_min)
-            if chunk_max is not None:
-                dates.append(chunk_max)
             table = pa.Table.from_pandas(filtered, preserve_index=False)
             if writer is None:
                 writer = pq.ParquetWriter(temp_output_path, table.schema)
@@ -185,6 +184,8 @@ def build_daily_valuation_metrics_from_files(
     if writer is None:
         pd.DataFrame(columns=DAILY_VALUATION_METRICS_COLUMNS).to_parquet(temp_output_path, index=False)
     temp_output_path.replace(output_path)
+    state_frame = pd.read_parquet(output_path, columns=["ticker", "date", "lastupdated"])
+    output_columns = pq.read_schema(output_path).names
 
     write_metadata(
         metadata_path,
@@ -196,10 +197,14 @@ def build_daily_valuation_metrics_from_files(
                 "input_files": [str(path) for path in input_paths],
                 "ticker_universe_file": str(universe_path),
                 "input_tickers": len(allowed),
-                "source_columns": DAILY_VALUATION_METRICS_COLUMNS,
-                "primary_key": DAILY_VALUATION_METRICS_PRIMARY_KEY,
-                "data_min_date": min(dates).isoformat() if dates else None,
-                "data_max_date": max(dates).isoformat() if dates else None,
+                **frame_state_metadata(
+                    state_frame,
+                    primary_key=DAILY_VALUATION_METRICS_PRIMARY_KEY,
+                    date_column="date",
+                    entity_column="ticker",
+                    expected_entities=len(allowed),
+                ),
+                "missing_required_columns": [column for column in DAILY_VALUATION_METRICS_COLUMNS if column not in output_columns],
             },
         ),
     )
@@ -269,7 +274,14 @@ def write_daily_valuation_metrics_snapshot(
     output_path = output_dir / DAILY_VALUATION_METRICS_PARQUET_FILE
     metadata_path = output_dir / DAILY_VALUATION_METRICS_METADATA_FILE
     normalized = _normalize_canonical_daily_valuation_metrics_frame(metrics)
-    date_min, date_max = _date_range(normalized, "date")
+    state_metadata = frame_state_metadata(
+        normalized,
+        primary_key=DAILY_VALUATION_METRICS_PRIMARY_KEY,
+        required_columns=DAILY_VALUATION_METRICS_COLUMNS,
+        date_column="date",
+        entity_column="ticker",
+        expected_entities=(metadata_extra or {}).get("input_tickers"),
+    )
     normalized.to_parquet(output_path, index=False)
     write_metadata(
         metadata_path,
@@ -278,9 +290,7 @@ def write_daily_valuation_metrics_snapshot(
             tickers=int(normalized["ticker"].nunique()) if "ticker" in normalized.columns else 0,
             extra={
                 "parquet_file": output_path.name,
-                "primary_key": DAILY_VALUATION_METRICS_PRIMARY_KEY,
-                "data_min_date": date_min.isoformat() if date_min is not None else None,
-                "data_max_date": date_max.isoformat() if date_max is not None else None,
+                **state_metadata,
                 **(metadata_extra or {}),
             },
         ),
@@ -300,18 +310,22 @@ def write_metadata(metadata_path: Path, metadata: dict[str, Any]) -> None:
 
 
 def base_metadata(*, rows: int, tickers: int, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    collected_at_utc = datetime.utcnow()
     return {
-        "collected_date_utc": collected_at_utc.date().isoformat(),
-        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        **utc_timestamp_metadata(),
         "provider": PROVIDER,
         "source": SOURCE,
         "source_table": DAILY_TABLE,
-        "dataset": "fundamentals",
-        "variant": "daily_valuation_metrics",
-        "mode": "replace",
-        "rows": rows,
-        "tickers": tickers,
+        **dataset_identity_metadata(
+            dataset_name=DAILY_VALUATION_METRICS_DATASET_NAME,
+            dataset_group=DAILY_VALUATION_METRICS_DATASET_GROUP,
+            write_mode=DAILY_VALUATION_METRICS_WRITE_MODE,
+            completeness_profile=DAILY_VALUATION_METRICS_COMPLETENESS_PROFILE,
+            primary_key=DAILY_VALUATION_METRICS_PRIMARY_KEY,
+            date_column="date",
+            entity_column="ticker",
+        ),
+        "row_count": rows,
+        "ticker_count": tickers,
         **(extra or {}),
     }
 
@@ -336,15 +350,6 @@ def _normalize_canonical_daily_valuation_metrics_frame(metrics: pd.DataFrame, *,
     if drop_duplicate_keys:
         frame = frame.drop_duplicates(subset=DAILY_VALUATION_METRICS_PRIMARY_KEY, keep="last")
     return frame.sort_values(DAILY_VALUATION_METRICS_PRIMARY_KEY).reset_index(drop=True)
-
-
-def _date_range(frame: pd.DataFrame, column: str) -> tuple[date | None, date | None]:
-    if frame.empty or column not in frame.columns:
-        return None, None
-    dates = pd.to_datetime(frame[column], errors="coerce").dropna()
-    if dates.empty:
-        return None, None
-    return dates.min().date(), dates.max().date()
 
 
 def _iter_daily_valuation_metric_frames(input_paths: list[Path], chunk_rows: int) -> Iterable[pd.DataFrame]:

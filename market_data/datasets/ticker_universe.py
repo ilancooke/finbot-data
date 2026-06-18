@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 import json
 from pathlib import Path
 import tempfile
@@ -9,6 +8,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from market_data.config import get_env, resolve_finbot_data_path
+from market_data.metadata import dataset_identity_metadata, frame_state_metadata, utc_timestamp_metadata
 from market_data.providers.nasdaq_data_link import NasdaqDataLinkClient
 
 PROVIDER = "sharadar"
@@ -21,6 +21,11 @@ RAW_TICKERS_JSONL_FILE = "tickers_sep_raw.jsonl"
 RAW_TICKERS_METADATA_FILE = "tickers_sep_raw.download.json"
 TICKERS_PARQUET_FILE = "tickers.parquet"
 TICKERS_METADATA_FILE = "tickers.metadata.json"
+TICKERS_DATASET_NAME = "reference.tickers"
+TICKERS_DATASET_GROUP = "reference"
+TICKERS_PRIMARY_KEY = ["ticker"]
+TICKERS_WRITE_MODE = "replace_snapshot"
+TICKERS_COMPLETENESS_PROFILE = "provider_snapshot"
 
 TICKER_COLUMNS = [
     "table",
@@ -148,7 +153,6 @@ def download_and_write_ticker_universe(
         resolved_output_dir,
         parquet_name=TICKERS_PARQUET_FILE,
         metadata_name=TICKERS_METADATA_FILE,
-        variant="tickers",
         metadata_extra={
             "raw_input_file": str(raw_path),
             "input_rows": len(tickers_all),
@@ -171,10 +175,8 @@ def write_raw_tickers_snapshot(rows: list[dict[str, Any]], output_dir: str | Pat
     output_path = output_dir / RAW_TICKERS_JSONL_FILE
     metadata_path = output_dir / RAW_TICKERS_METADATA_FILE
 
-    collected_at_utc = datetime.utcnow()
     metadata = {
-        "collected_date_utc": collected_at_utc.date().isoformat(),
-        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        **utc_timestamp_metadata(),
         "provider": PROVIDER,
         "source": SOURCE,
         "source_table": TICKERS_TABLE,
@@ -210,7 +212,6 @@ def write_tickers_snapshot(
     output_dir: str | Path,
     parquet_name: str,
     metadata_name: str,
-    variant: str,
     metadata_extra: dict[str, Any] | None = None,
 ) -> Path:
     output_dir = Path(output_dir)
@@ -220,19 +221,28 @@ def write_tickers_snapshot(
     normalized = normalize_tickers_frame(tickers)
     normalized.to_parquet(output_path, index=False)
 
-    collected_at_utc = datetime.utcnow()
     metadata = {
-        "collected_date_utc": collected_at_utc.date().isoformat(),
-        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        **utc_timestamp_metadata(),
         "provider": PROVIDER,
         "source": SOURCE,
         "source_table": TICKERS_TABLE,
-        "dataset": "tickers",
-        "variant": variant,
-        "mode": "replace",
-        "rows": int(len(normalized)),
-        "tickers": int(normalized["ticker"].nunique()) if "ticker" in normalized.columns else 0,
+        **dataset_identity_metadata(
+            dataset_name=TICKERS_DATASET_NAME,
+            dataset_group=TICKERS_DATASET_GROUP,
+            write_mode=TICKERS_WRITE_MODE,
+            completeness_profile=TICKERS_COMPLETENESS_PROFILE,
+            primary_key=TICKERS_PRIMARY_KEY,
+            entity_column="ticker",
+        ),
+        "row_count": int(len(normalized)),
+        "ticker_count": int(normalized["ticker"].nunique()) if "ticker" in normalized.columns else 0,
         "parquet_file": output_path.name,
+        **frame_state_metadata(
+            normalized,
+            primary_key=TICKERS_PRIMARY_KEY,
+            required_columns=TICKER_COLUMNS,
+            entity_column="ticker",
+        ),
         **(metadata_extra or {}),
     }
     with tempfile.NamedTemporaryFile(dir=output_dir, suffix=".json", mode="w", encoding="utf-8", delete=False) as temp_metadata:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 import json
 import logging
 from pathlib import Path
@@ -14,6 +14,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from market_data.config import get_env, resolve_finbot_data_path
+from market_data.metadata import (
+    dataset_identity_metadata,
+    dimension_entity_counts,
+    frame_state_metadata,
+    utc_timestamp_metadata,
+)
 from market_data.providers.nasdaq_data_link import NasdaqDataLinkClient
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,10 @@ DEFAULT_CSV_CHUNK_ROWS = 100_000
 
 SF1_PARQUET_FILE = "sf1.parquet"
 SF1_METADATA_FILE = "sf1.metadata.json"
+SF1_DATASET_NAME = "fundamentals.sf1"
+SF1_DATASET_GROUP = "fundamentals"
+SF1_WRITE_MODE = "incremental_merge"
+SF1_COMPLETENESS_PROFILE = "fundamental_filings"
 
 SF1_PRIMARY_KEY = ["ticker", "dimension", "datekey", "reportperiod"]
 SF1_DATE_COLUMNS = ["calendardate", "datekey", "reportperiod", "lastupdated"]
@@ -258,8 +268,6 @@ def build_sf1_from_files(
     writer: pq.ParquetWriter | None = None
     rows = 0
     tickers: set[str] = set()
-    datekeys: list[date] = []
-    reportperiods: list[date] = []
     dimensions: set[str] = set()
 
     try:
@@ -274,16 +282,6 @@ def build_sf1_from_files(
             rows += len(filtered)
             tickers.update(filtered["ticker"].dropna().astype(str).unique().tolist())
             dimensions.update(filtered["dimension"].dropna().astype(str).unique().tolist())
-            chunk_date_min, chunk_date_max = _date_range(filtered, "datekey")
-            if chunk_date_min is not None:
-                datekeys.append(chunk_date_min)
-            if chunk_date_max is not None:
-                datekeys.append(chunk_date_max)
-            chunk_period_min, chunk_period_max = _date_range(filtered, "reportperiod")
-            if chunk_period_min is not None:
-                reportperiods.append(chunk_period_min)
-            if chunk_period_max is not None:
-                reportperiods.append(chunk_period_max)
             table = pa.Table.from_pandas(filtered, preserve_index=False)
             if writer is None:
                 writer = pq.ParquetWriter(temp_output_path, table.schema)
@@ -295,6 +293,9 @@ def build_sf1_from_files(
     if writer is None:
         pd.DataFrame(columns=SF1_COLUMNS).to_parquet(temp_output_path, index=False)
     temp_output_path.replace(output_path)
+    state_frame = pd.read_parquet(output_path, columns=["ticker", "dimension", "datekey", "reportperiod", "lastupdated"])
+    output_columns = pq.read_schema(output_path).names
+    period_min, period_max = _date_range(state_frame, "reportperiod")
 
     write_metadata(
         metadata_path,
@@ -306,13 +307,22 @@ def build_sf1_from_files(
                 "input_files": [str(path) for path in input_paths],
                 "ticker_universe_file": str(universe_path),
                 "input_tickers": len(allowed),
-                "source_columns": SF1_COLUMNS,
-                "primary_key": SF1_PRIMARY_KEY,
                 "dimensions": sorted(dimensions),
-                "data_min_date": min(datekeys).isoformat() if datekeys else None,
-                "data_max_date": max(datekeys).isoformat() if datekeys else None,
-                "reportperiod_min_date": min(reportperiods).isoformat() if reportperiods else None,
-                "reportperiod_max_date": max(reportperiods).isoformat() if reportperiods else None,
+                "min_reportperiod": period_min.isoformat() if period_min is not None else None,
+                "max_reportperiod": period_max.isoformat() if period_max is not None else None,
+                **frame_state_metadata(
+                    state_frame,
+                    primary_key=SF1_PRIMARY_KEY,
+                    date_column="datekey",
+                    entity_column="ticker",
+                    expected_entities=len(allowed),
+                ),
+                "dimension_ticker_counts": dimension_entity_counts(
+                    state_frame,
+                    dimension_column="dimension",
+                    entity_column="ticker",
+                ),
+                "missing_required_columns": [column for column in SF1_COLUMNS if column not in output_columns],
             },
         ),
     )
@@ -382,8 +392,15 @@ def write_sf1_snapshot(
     output_path = output_dir / SF1_PARQUET_FILE
     metadata_path = output_dir / SF1_METADATA_FILE
     normalized = _normalize_canonical_sf1_frame(fundamentals)
-    date_min, date_max = _date_range(normalized, "datekey")
     period_min, period_max = _date_range(normalized, "reportperiod")
+    state_metadata = frame_state_metadata(
+        normalized,
+        primary_key=SF1_PRIMARY_KEY,
+        required_columns=SF1_COLUMNS,
+        date_column="datekey",
+        entity_column="ticker",
+        expected_entities=(metadata_extra or {}).get("input_tickers"),
+    )
     normalized.to_parquet(output_path, index=False)
     write_metadata(
         metadata_path,
@@ -392,14 +409,17 @@ def write_sf1_snapshot(
             tickers=int(normalized["ticker"].nunique()) if "ticker" in normalized.columns else 0,
             extra={
                 "parquet_file": output_path.name,
-                "primary_key": SF1_PRIMARY_KEY,
                 "dimensions": sorted(normalized["dimension"].dropna().astype(str).unique().tolist())
                 if "dimension" in normalized.columns
                 else [],
-                "data_min_date": date_min.isoformat() if date_min is not None else None,
-                "data_max_date": date_max.isoformat() if date_max is not None else None,
-                "reportperiod_min_date": period_min.isoformat() if period_min is not None else None,
-                "reportperiod_max_date": period_max.isoformat() if period_max is not None else None,
+                "min_reportperiod": period_min.isoformat() if period_min is not None else None,
+                "max_reportperiod": period_max.isoformat() if period_max is not None else None,
+                **state_metadata,
+                "dimension_ticker_counts": dimension_entity_counts(
+                    normalized,
+                    dimension_column="dimension",
+                    entity_column="ticker",
+                ),
                 **(metadata_extra or {}),
             },
         ),
@@ -419,18 +439,22 @@ def write_metadata(metadata_path: Path, metadata: dict[str, Any]) -> None:
 
 
 def base_metadata(*, rows: int, tickers: int, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    collected_at_utc = datetime.utcnow()
     return {
-        "collected_date_utc": collected_at_utc.date().isoformat(),
-        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        **utc_timestamp_metadata(),
         "provider": PROVIDER,
         "source": SOURCE,
         "source_table": SF1_TABLE,
-        "dataset": "fundamentals",
-        "variant": "sf1",
-        "mode": "replace",
-        "rows": rows,
-        "tickers": tickers,
+        **dataset_identity_metadata(
+            dataset_name=SF1_DATASET_NAME,
+            dataset_group=SF1_DATASET_GROUP,
+            write_mode=SF1_WRITE_MODE,
+            completeness_profile=SF1_COMPLETENESS_PROFILE,
+            primary_key=SF1_PRIMARY_KEY,
+            date_column="datekey",
+            entity_column="ticker",
+        ),
+        "row_count": rows,
+        "ticker_count": tickers,
         **(extra or {}),
     }
 

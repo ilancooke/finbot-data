@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 import json
 import logging
 from pathlib import Path
@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from market_data.config import get_env, resolve_finbot_data_path
+from market_data.metadata import dataset_identity_metadata, frame_state_metadata, utc_timestamp_metadata
 from market_data.providers.nasdaq_data_link import NasdaqDataLinkClient
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,11 @@ DEFAULT_CSV_CHUNK_ROWS = 500_000
 
 HISTORICAL_PARQUET_FILE = "historical.parquet"
 HISTORICAL_METADATA_FILE = "historical.metadata.json"
+HISTORICAL_DATASET_NAME = "market.daily_bars.historical"
+HISTORICAL_DATASET_GROUP = "market"
+HISTORICAL_PRIMARY_KEY = ["symbol", "date"]
+HISTORICAL_WRITE_MODE = "incremental_merge"
+HISTORICAL_COMPLETENESS_PROFILE = "trading_day_symbol_panel"
 
 CANONICAL_PRICE_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "volume", "closeadj", "closeunadj", "lastupdated"]
 TABLE_COLUMNS = ["ticker", "date", "open", "high", "low", "close", "volume", "closeadj", "closeunadj", "lastupdated"]
@@ -171,7 +177,6 @@ def build_historical_from_files(
     writer: pq.ParquetWriter | None = None
     rows = 0
     symbols: set[str] = set()
-    dates: list[date] = []
 
     try:
         for frame in _iter_price_frames(input_paths, chunk_rows=chunk_rows):
@@ -184,11 +189,6 @@ def build_historical_from_files(
                 continue
             rows += len(filtered)
             symbols.update(filtered["symbol"].dropna().astype(str).unique().tolist())
-            chunk_min, chunk_max = date_range(filtered)
-            if chunk_min is not None:
-                dates.append(chunk_min)
-            if chunk_max is not None:
-                dates.append(chunk_max)
             table = pa.Table.from_pandas(filtered, preserve_index=False)
             if writer is None:
                 writer = pq.ParquetWriter(temp_output_path, table.schema)
@@ -200,8 +200,8 @@ def build_historical_from_files(
     if writer is None:
         pd.DataFrame(columns=CANONICAL_PRICE_COLUMNS).to_parquet(temp_output_path, index=False)
     temp_output_path.replace(output_path)
-    data_min_date = min(dates).isoformat() if dates else None
-    data_max_date = max(dates).isoformat() if dates else None
+    state_frame = pd.read_parquet(output_path, columns=["date", "symbol", "lastupdated"])
+    output_columns = pq.read_schema(output_path).names
 
     write_metadata(
         metadata_path,
@@ -213,9 +213,14 @@ def build_historical_from_files(
                 "input_files": [str(path) for path in input_paths],
                 "ticker_universe_file": str(universe_path),
                 "input_tickers": len(allowed),
-                "source_columns": TABLE_COLUMNS,
-                "data_min_date": data_min_date,
-                "data_max_date": data_max_date,
+                **frame_state_metadata(
+                    state_frame,
+                    primary_key=HISTORICAL_PRIMARY_KEY,
+                    date_column="date",
+                    entity_column="symbol",
+                    expected_entities=len(allowed),
+                ),
+                "missing_required_columns": [column for column in CANONICAL_PRICE_COLUMNS if column not in output_columns],
             },
         ),
     )
@@ -278,7 +283,14 @@ def write_historical_snapshot(
     output_path = output_dir / HISTORICAL_PARQUET_FILE
     metadata_path = output_dir / HISTORICAL_METADATA_FILE
     normalized = _normalize_canonical_price_frame(prices)
-    data_min_date, data_max_date = date_range(normalized)
+    state_metadata = frame_state_metadata(
+        normalized,
+        primary_key=HISTORICAL_PRIMARY_KEY,
+        required_columns=CANONICAL_PRICE_COLUMNS,
+        date_column="date",
+        entity_column="symbol",
+        expected_entities=(metadata_extra or {}).get("input_tickers"),
+    )
     normalized.to_parquet(output_path, index=False)
     write_metadata(
         metadata_path,
@@ -287,8 +299,7 @@ def write_historical_snapshot(
             symbols=int(normalized["symbol"].nunique()) if "symbol" in normalized.columns else 0,
             extra={
                 "parquet_file": output_path.name,
-                "data_min_date": data_min_date.isoformat() if data_min_date is not None else None,
-                "data_max_date": data_max_date.isoformat() if data_max_date is not None else None,
+                **state_metadata,
                 **(metadata_extra or {}),
             },
         ),
@@ -308,29 +319,24 @@ def write_metadata(metadata_path: Path, metadata: dict[str, Any]) -> None:
 
 
 def base_metadata(*, rows: int, symbols: int, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    collected_at_utc = datetime.utcnow()
     return {
-        "collected_date_utc": collected_at_utc.date().isoformat(),
-        "collected_at_utc": collected_at_utc.isoformat(timespec="seconds") + "Z",
+        **utc_timestamp_metadata(),
         "provider": PROVIDER,
         "source": SOURCE,
         "source_table": SEP_TABLE,
-        "dataset": "daily_bars",
-        "variant": "historical",
-        "mode": "replace",
-        "rows": rows,
-        "symbols": symbols,
+        **dataset_identity_metadata(
+            dataset_name=HISTORICAL_DATASET_NAME,
+            dataset_group=HISTORICAL_DATASET_GROUP,
+            write_mode=HISTORICAL_WRITE_MODE,
+            completeness_profile=HISTORICAL_COMPLETENESS_PROFILE,
+            primary_key=HISTORICAL_PRIMARY_KEY,
+            date_column="date",
+            entity_column="symbol",
+        ),
+        "row_count": rows,
+        "symbol_count": symbols,
         **(extra or {}),
     }
-
-
-def date_range(prices: pd.DataFrame) -> tuple[date | None, date | None]:
-    if prices.empty or "date" not in prices.columns:
-        return None, None
-    dates = pd.to_datetime(prices["date"], errors="coerce").dropna()
-    if dates.empty:
-        return None, None
-    return dates.min().date(), dates.max().date()
 
 
 def _normalize_input_price_frame(prices: pd.DataFrame) -> pd.DataFrame:

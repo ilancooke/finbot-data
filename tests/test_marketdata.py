@@ -70,6 +70,25 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+def assert_legacy_dataset_metadata_absent(metadata):
+    legacy_keys = {
+        "collected_at_utc",
+        "collected_date_utc",
+        "dataset",
+        "variant",
+        "mode",
+        "rows",
+        "tickers",
+        "symbols",
+        "data_min_date",
+        "data_max_date",
+        "reportperiod_min_date",
+        "reportperiod_max_date",
+        "source_columns",
+    }
+    assert legacy_keys.isdisjoint(metadata)
+
+
 def test_nasdaq_data_link_client_collects_paginated_table_rows():
     session = FakeSession(
         [
@@ -208,9 +227,18 @@ def test_download_and_write_ticker_universe_writes_raw_and_filtered(tmp_path, mo
     assert raw_metadata["rows"] == 2
     assert tickers["ticker"].tolist() == ["AAPL"]
     assert metadata["provider"] == "sharadar"
-    assert metadata["variant"] == "tickers"
+    assert metadata["dataset_name"] == "reference.tickers"
+    assert metadata["dataset_group"] == "reference"
+    assert metadata["write_mode"] == "replace_snapshot"
+    assert metadata["completeness_profile"] == "provider_snapshot"
+    assert metadata["primary_key"] == ["ticker"]
+    assert metadata["row_count"] == 1
+    assert metadata["ticker_count"] == 1
+    assert metadata["duplicate_key_count"] == 0
+    assert metadata["missing_required_columns"] == []
     assert metadata["raw_input_file"] == str(paths["tickers_raw"])
     assert metadata["filter"]["market_caps"] == ["4 - Mid", "5 - Large", "6 - Mega"]
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_filter_tickers_keeps_active_mid_large_common_stocks():
@@ -273,10 +301,24 @@ def test_build_historical_from_csv_file_filters_to_ticker_universe(tmp_path):
     assert output_path == tmp_path / HISTORICAL_PARQUET_FILE
     assert prices["symbol"].tolist() == ["AAPL"]
     assert metadata["provider"] == "sharadar"
-    assert metadata["variant"] == "historical"
+    assert metadata["dataset_name"] == "market.daily_bars.historical"
+    assert metadata["dataset_group"] == "market"
+    assert metadata["write_mode"] == "incremental_merge"
+    assert metadata["completeness_profile"] == "trading_day_symbol_panel"
+    assert metadata["primary_key"] == ["symbol", "date"]
+    assert metadata["row_count"] == 1
+    assert metadata["symbol_count"] == 1
     assert metadata["input_tickers"] == 1
-    assert metadata["data_min_date"] == "2018-09-04"
-    assert metadata["data_max_date"] == "2018-09-04"
+    assert metadata["min_date"] == "2018-09-04"
+    assert metadata["max_date"] == "2018-09-04"
+    assert metadata["latest_date"] == "2018-09-04"
+    assert metadata["latest_date_coverage_count"] == 1
+    assert metadata["latest_date_coverage_pct"] == 1.0
+    assert metadata["provider_min_lastupdated"] == "2026-05-11"
+    assert metadata["provider_max_lastupdated"] == "2026-05-11"
+    assert metadata["duplicate_key_count"] == 0
+    assert metadata["missing_required_columns"] == []
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_request_bulk_price_files_uses_table_export(tmp_path, monkeypatch):
@@ -398,13 +440,19 @@ def test_update_historical_merges_lastupdated_rows(tmp_path, monkeypatch):
     assert calls == [(date(2026, 5, 11), "test-key")]
     assert prices["symbol"].tolist() == ["AAPL", "MSFT"]
     assert prices.loc[prices["symbol"] == "AAPL", "close"].item() == 57.09
-    assert metadata["variant"] == "historical"
     assert metadata["update_filter"] == "lastupdated.gte"
     assert metadata["input_tickers"] == 2
     assert metadata["update_raw_rows"] == 3
     assert metadata["update_rows"] == 2
-    assert metadata["data_min_date"] == "2018-09-04"
-    assert metadata["data_max_date"] == "2018-09-04"
+    assert metadata["min_date"] == "2018-09-04"
+    assert metadata["max_date"] == "2018-09-04"
+    assert metadata["row_count"] == 2
+    assert metadata["symbol_count"] == 2
+    assert metadata["latest_date_coverage_count"] == 2
+    assert metadata["latest_date_coverage_pct"] == 1.0
+    assert metadata["provider_max_lastupdated"] == "2026-05-11"
+    assert metadata["duplicate_key_count"] == 0
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_normalize_sf1_frame_preserves_schema_and_dates():
@@ -461,12 +509,24 @@ def test_build_sf1_from_files_filters_to_ticker_universe(tmp_path):
     assert fundamentals["dimension"].tolist() == ["ART", "MRQ"]
     assert metadata["provider"] == "sharadar"
     assert metadata["source_table"] == "SHARADAR/SF1"
+    assert metadata["dataset_name"] == "fundamentals.sf1"
+    assert metadata["dataset_group"] == "fundamentals"
+    assert metadata["write_mode"] == "incremental_merge"
+    assert metadata["completeness_profile"] == "fundamental_filings"
     assert metadata["input_tickers"] == 1
     assert metadata["dimensions"] == ["ART", "MRQ"]
-    assert metadata["data_min_date"] == "2026-03-28"
-    assert metadata["data_max_date"] == "2026-05-01"
-    assert metadata["reportperiod_min_date"] == "2026-03-28"
-    assert metadata["reportperiod_max_date"] == "2026-03-28"
+    assert metadata["row_count"] == 2
+    assert metadata["ticker_count"] == 1
+    assert metadata["dimension_ticker_counts"] == {"ART": 1, "MRQ": 1}
+    assert metadata["min_date"] == "2026-03-28"
+    assert metadata["max_date"] == "2026-05-01"
+    assert metadata["min_reportperiod"] == "2026-03-28"
+    assert metadata["max_reportperiod"] == "2026-03-28"
+    assert metadata["provider_min_lastupdated"] == "2026-05-04"
+    assert metadata["provider_max_lastupdated"] == "2026-05-04"
+    assert metadata["duplicate_key_count"] == 0
+    assert metadata["missing_required_columns"] == []
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_request_bulk_sf1_files_uses_table_export(tmp_path, monkeypatch):
@@ -587,12 +647,17 @@ def test_update_sf1_merges_lastupdated_rows_by_primary_key(tmp_path, monkeypatch
     assert calls == [(date(2026, 5, 4), "test-key")]
     assert fundamentals[["ticker", "dimension"]].values.tolist() == [["AAPL", "ART"], ["MSFT", "MRQ"]]
     assert fundamentals.loc[fundamentals["ticker"] == "AAPL", "revenue"].item() == 1000
-    assert metadata["variant"] == "sf1"
     assert metadata["update_filter"] == "lastupdated.gte"
     assert metadata["input_tickers"] == 2
     assert metadata["update_raw_rows"] == 3
     assert metadata["update_rows"] == 2
     assert metadata["primary_key"] == ["ticker", "dimension", "datekey", "reportperiod"]
+    assert metadata["row_count"] == 2
+    assert metadata["ticker_count"] == 2
+    assert metadata["dimension_ticker_counts"] == {"ART": 1, "MRQ": 1}
+    assert metadata["provider_max_lastupdated"] == "2026-05-04"
+    assert metadata["duplicate_key_count"] == 0
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_normalize_daily_valuation_metrics_frame_preserves_schema_and_dates():
@@ -649,11 +714,24 @@ def test_build_daily_valuation_metrics_from_files_filters_to_ticker_universe(tmp
     assert sorted(metrics["date"].tolist()) == [date(2026, 6, 11), date(2026, 6, 12)]
     assert metadata["provider"] == "sharadar"
     assert metadata["source_table"] == "SHARADAR/DAILY"
-    assert metadata["variant"] == "daily_valuation_metrics"
+    assert metadata["dataset_name"] == "fundamentals.daily_valuation_metrics"
+    assert metadata["dataset_group"] == "fundamentals"
+    assert metadata["write_mode"] == "incremental_merge"
+    assert metadata["completeness_profile"] == "daily_ticker_metrics"
     assert metadata["input_tickers"] == 1
     assert metadata["primary_key"] == ["ticker", "date"]
-    assert metadata["data_min_date"] == "2026-06-11"
-    assert metadata["data_max_date"] == "2026-06-12"
+    assert metadata["row_count"] == 2
+    assert metadata["ticker_count"] == 1
+    assert metadata["min_date"] == "2026-06-11"
+    assert metadata["max_date"] == "2026-06-12"
+    assert metadata["latest_date"] == "2026-06-12"
+    assert metadata["latest_date_coverage_count"] == 1
+    assert metadata["latest_date_coverage_pct"] == 1.0
+    assert metadata["provider_min_lastupdated"] == "2026-06-11"
+    assert metadata["provider_max_lastupdated"] == "2026-06-12"
+    assert metadata["duplicate_key_count"] == 0
+    assert metadata["missing_required_columns"] == []
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_request_bulk_daily_valuation_metric_files_uses_table_export(tmp_path, monkeypatch):
@@ -770,12 +848,18 @@ def test_update_daily_valuation_metrics_merges_lastupdated_rows_by_ticker_date(t
     assert calls == [(date(2026, 6, 13), "test-key")]
     assert metrics["ticker"].tolist() == ["AAPL", "MSFT"]
     assert metrics.loc[metrics["ticker"] == "AAPL", "ev"].item() == 4316000.0
-    assert metadata["variant"] == "daily_valuation_metrics"
     assert metadata["update_filter"] == "lastupdated.gte"
     assert metadata["input_tickers"] == 2
     assert metadata["update_raw_rows"] == 3
     assert metadata["update_rows"] == 2
     assert metadata["primary_key"] == ["ticker", "date"]
+    assert metadata["row_count"] == 2
+    assert metadata["ticker_count"] == 2
+    assert metadata["latest_date_coverage_count"] == 2
+    assert metadata["latest_date_coverage_pct"] == 1.0
+    assert metadata["provider_max_lastupdated"] == "2026-06-13"
+    assert metadata["duplicate_key_count"] == 0
+    assert_legacy_dataset_metadata_absent(metadata)
 
 
 def test_download_ticker_universe_cli_writes_datasets(tmp_path, monkeypatch):

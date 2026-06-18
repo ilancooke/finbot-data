@@ -57,6 +57,31 @@ This writes:
 The filtered `tickers.parquet` keeps active domestic mid, large, and mega cap common stocks on
 `NASDAQ`, `NYSE`, or `NYSEMKT`.
 
+## Dataset State Metadata
+
+Every durable parquet dataset has a sidecar `*.metadata.json` file with current-state fields
+intended for `finbot-catalog` health checks:
+
+- `dataset_name`, `dataset_group`, `write_mode`, and `completeness_profile`
+- `row_count` plus `ticker_count` or `symbol_count`
+- `primary_key`, `date_column`, and `entity_column` where applicable
+- `min_date`, `max_date`, and `latest_date` for dated datasets
+- `latest_date_coverage_count` and `latest_date_coverage_pct` for daily panel datasets
+- `provider_min_lastupdated` and `provider_max_lastupdated` when provider update dates exist
+- `duplicate_key_count` and `missing_required_columns`
+
+The current profiles are:
+
+| Dataset | Write mode | Completeness profile |
+| --- | --- | --- |
+| `reference.tickers` | `replace_snapshot` | `provider_snapshot` |
+| `market.daily_bars.historical` | `incremental_merge` | `trading_day_symbol_panel` |
+| `fundamentals.sf1` | `incremental_merge` | `fundamental_filings` |
+| `fundamentals.daily_valuation_metrics` | `incremental_merge` | `daily_ticker_metrics` |
+
+These fields describe the current condition of each dataset. This repo does not keep job-run
+history.
+
 ## Daily Price Workflow
 
 Download a Nasdaq Data Link table export and build the historical daily price dataset:
