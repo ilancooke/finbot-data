@@ -28,6 +28,17 @@ This repository is a plain-script market data downloader for Finbot. Future codi
 - Put reusable logic in `market_data/`; keep files in `scripts/` as thin CLI entrypoints.
 - Keep output files under `data/` by default.
 - Write parquet data plus sidecar metadata JSON for durable datasets.
+- Sidecar metadata for durable parquet datasets should use the simplified current-state
+  contract: `dataset_name`, `dataset_group`, `generated_at_utc`, `write_mode`,
+  `completeness_profile`, `row_count`, `ticker_count` or `symbol_count`,
+  `primary_key`, date/entity columns when applicable, `min_date`, `max_date`,
+  latest-date coverage fields for daily panels, provider `lastupdated` bounds,
+  `duplicate_key_count`, and `missing_required_columns`.
+- Do not preserve legacy durable metadata aliases such as `rows`, `tickers`, `symbols`,
+  `data_min_date`, `data_max_date`, `collected_at_utc`, `dataset`, `variant`, or `mode`
+  unless the user explicitly asks for a compatibility layer.
+- This repo records current dataset state in metadata sidecars; it does not maintain
+  job-run history.
 - Prefer `FINBOT_DATA_ROOT` for shared multipackage deployments. Keep dataset-specific env vars such as `FINBOT_RAW_BARS_DIR` and `FINBOT_REFERENCE_DIR` as explicit overrides.
 - Avoid exposing API keys in logs, test output, errors, README examples, or commit messages.
 - Preserve support for `.env` and environment variables.
