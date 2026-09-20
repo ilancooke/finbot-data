@@ -26,10 +26,38 @@ def _output_dirs() -> list[Path]:
         data_root,
         Path(os.getenv("FINBOT_RAW_BARS_DIR", str(data_root / "market/daily_bars"))),
         Path(os.getenv("FINBOT_REFERENCE_DIR", str(data_root / "reference"))),
-        Path(os.getenv("FINBOT_FUNDAMENTALS_DIR", str(data_root / "fundamentals"))),
-        Path(os.getenv("FINBOT_RAW_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/sep"))),
-        Path(os.getenv("FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/sf1"))),
-        Path(os.getenv("FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR", str(data_root / "raw/nasdaq_data_link/sharadar/daily"))),
+        Path(os.getenv("FINBOT_RAW_MASSIVE_DIR", str(data_root / "raw/massive"))),
+        Path(os.getenv("FINBOT_RAW_ALPACA_DIR", str(data_root / "raw/alpaca"))),
+        Path(
+            os.getenv(
+                "FINBOT_RAW_REFERENCE_DIR",
+                str(data_root / "raw/reference/us_equity_universe"),
+            )
+        ),
+        Path(
+            os.getenv(
+                "FINBOT_RAW_ALPACA_COVERAGE_DIR",
+                str(data_root / "raw/alpaca/coverage_audit"),
+            )
+        ),
+        Path(
+            os.getenv(
+                "FINBOT_RAW_ALPACA_NAME_CHANGES_DIR",
+                str(data_root / "raw/alpaca/name_changes"),
+            )
+        ),
+        Path(
+            os.getenv(
+                "FINBOT_RAW_ALPACA_CORPORATE_ACTIONS_DIR",
+                str(data_root / "raw/alpaca/corporate_actions"),
+            )
+        ),
+        Path(
+            os.getenv(
+                "FINBOT_RAW_ALPACA_BARS_DIR",
+                str(data_root / "raw/alpaca/daily_bars"),
+            )
+        ),
     ]
 
 

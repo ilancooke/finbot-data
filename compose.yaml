@@ -1,50 +1,95 @@
 x-finbot-data-job: &finbot-data-job
-    build: .
-    image: finbot-data:local
-    environment:
-      NASDAQ_DATA_LINK_API_KEY: ${NASDAQ_DATA_LINK_API_KEY:-}
-      HOST_UID: ${HOST_UID:-1000}
-      HOST_GID: ${HOST_GID:-1000}
-      FINBOT_DATA_ROOT: /data
-      FINBOT_RAW_BARS_DIR: /data/market/daily_bars
-      FINBOT_REFERENCE_DIR: /data/reference
-      FINBOT_FUNDAMENTALS_DIR: /data/fundamentals
-      FINBOT_RAW_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/sep
-      FINBOT_RAW_FUNDAMENTALS_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/sf1
-      FINBOT_RAW_DAILY_VALUATION_METRICS_EXPORT_DIR: /data/raw/nasdaq_data_link/sharadar/daily
-    volumes:
-      - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
+  build: .
+  image: finbot-data:local
+  environment: &finbot-data-environment
+    HOST_UID: ${HOST_UID:-1000}
+    HOST_GID: ${HOST_GID:-1000}
+    FINBOT_DATA_ROOT: /data
+    FINBOT_RAW_BARS_DIR: /data/market/daily_bars
+    FINBOT_REFERENCE_DIR: /data/reference
+    FINBOT_RAW_MASSIVE_DIR: /data/raw/massive
+    FINBOT_RAW_ALPACA_DIR: /data/raw/alpaca
+    FINBOT_RAW_REFERENCE_DIR: /data/raw/reference/us_equity_universe
+    FINBOT_RAW_ALPACA_COVERAGE_DIR: /data/raw/alpaca/coverage_audit
+    FINBOT_RAW_ALPACA_NAME_CHANGES_DIR: /data/raw/alpaca/name_changes
+    FINBOT_RAW_ALPACA_CORPORATE_ACTIONS_DIR: /data/raw/alpaca/corporate_actions
+    FINBOT_RAW_ALPACA_BARS_DIR: /data/raw/alpaca/daily_bars
+  volumes:
+    - ${FINBOT_HOST_DATA_ROOT:-./data}:/data
 
 services:
   finbot-data:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices.py"]
-    command: ["--help"]
+    command: ["python", "scripts/check_provider_access.py", "--help"]
 
-  finbot-ticker-universe:
+  finbot-check-massive:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_ticker_universe.py"]
+    environment:
+      <<: *finbot-data-environment
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
+    command: ["python", "scripts/check_provider_access.py", "massive"]
 
-  finbot-historical-prices:
+  finbot-check-alpaca:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_historical_prices.py"]
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/check_provider_access.py", "alpaca"]
 
-  finbot-update-historical-prices:
+  finbot-security-master:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_historical_prices.py"]
+    environment:
+      <<: *finbot-data-environment
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_security_master.py"]
 
-  finbot-fundamentals:
+  finbot-alpaca-coverage-audit:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_fundamentals.py"]
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/audit_alpaca_coverage.py"]
 
-  finbot-update-fundamentals:
+  finbot-symbol-episodes:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_fundamentals.py"]
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_symbol_episodes.py"]
 
-  finbot-daily-valuation-metrics:
+  finbot-corporate-actions:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/download_daily_valuation_metrics.py"]
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_corporate_actions.py"]
 
-  finbot-update-daily-valuation-metrics:
+  finbot-daily-bars-pilot:
     <<: *finbot-data-job
-    entrypoint: ["python", "scripts/docker_entrypoint.py", "python", "scripts/update_daily_valuation_metrics.py"]
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_daily_bars.py", "pilot"]
+
+  finbot-daily-bars-backfill:
+    <<: *finbot-data-job
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_daily_bars.py", "backfill"]
+
+  finbot-daily-bars-update:
+    <<: *finbot-data-job
+    environment:
+      <<: *finbot-data-environment
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+    command: ["python", "scripts/download_daily_bars.py", "update"]

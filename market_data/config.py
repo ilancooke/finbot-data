@@ -33,6 +33,29 @@ def get_env(key: str, default: str = "", dotenv_path: Path | None = None) -> str
     return default
 
 
+def get_massive_api_key(dotenv_path: Path | None = None) -> str:
+    api_key = get_env("MASSIVE_API_KEY", dotenv_path=dotenv_path)
+    if not api_key:
+        raise RuntimeError("Missing MASSIVE_API_KEY")
+    return api_key
+
+
+def get_alpaca_credentials(dotenv_path: Path | None = None) -> tuple[str, str]:
+    api_key = get_env("ALPACA_API_KEY", dotenv_path=dotenv_path)
+    api_secret = get_env("ALPACA_API_SECRET_KEY", dotenv_path=dotenv_path)
+    missing = [
+        name
+        for name, value in (
+            ("ALPACA_API_KEY", api_key),
+            ("ALPACA_API_SECRET_KEY", api_secret),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"Missing {', '.join(missing)}")
+    return api_key, api_secret
+
+
 def resolve_finbot_data_path(
     explicit_path: str | Path | None,
     env_key: str,
